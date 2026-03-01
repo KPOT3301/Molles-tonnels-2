@@ -4,13 +4,17 @@ import base64
 import re
 import socket
 import time
+import json
+import subprocess
+import requests
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 
-MAX_SERVERS = 3000
+MAX_FINAL = 1000
+FAST_STAGE_LIMIT = 2000
 MAX_PING = 1000
-PING_THREADS = 300
-GITHUB_THREADS = 50
+PING_THREADS = 400
+XRAY_PARALLEL = 15
 
 OUTPUT_FILE = "Molestunnels.txt"
 
@@ -22,12 +26,6 @@ HEADER = """#profile-title:🇷🇺КРОТовыеТОННЕЛИ🇷🇺
 #announce:🇷🇺КРОТовыеТОННЕЛИ🇷🇺
 """
 
-stop_event = asyncio.Event()
-valid_servers = []
-counter = 1
-
-
-# ================= TCP PING =================
 def tcp_ping(host, port):
     try:
         start = time.time()
@@ -37,81 +35,87 @@ def tcp_ping(host, port):
         return None
 
 
-# ================= COUNTRY =================
-async def get_country(session, ip):
+def build_xray_config(vless_url, port):
+    parsed = urlparse(vless_url)
+    uuid = parsed.username
+    host = parsed.hostname
+    server_port = parsed.port
+
+    return {
+        "inbounds": [{
+            "port": port,
+            "listen": "127.0.0.1",
+            "protocol": "socks",
+            "settings": {"udp": False}
+        }],
+        "outbounds": [{
+            "protocol": "vless",
+            "settings": {
+                "vnext": [{
+                    "address": host,
+                    "port": server_port,
+                    "users": [{"id": uuid}]
+                }]
+            },
+            "streamSettings": {"security": "tls"}
+        }]
+    }
+
+
+def test_vless_google(vless_url, index):
+    local_port = 20000 + index
+
+    config = build_xray_config(vless_url, local_port)
+
+    config_file = f"xray_{index}.json"
+    with open(config_file, "w") as f:
+        json.dump(config, f)
+
+    proc = subprocess.Popen(
+        ["./xray", "run", "-c", config_file],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+
+    time.sleep(2)
+
     try:
-        async with session.get(
-            f"http://ip-api.com/json/{ip}?fields=countryCode",
-            timeout=3
-        ) as r:
-            data = await r.json()
-            return data.get("countryCode", "UN")
-    except:
-        return "UN"
+        proxies = {
+            "http": f"socks5h://127.0.0.1:{local_port}",
+            "https": f"socks5h://127.0.0.1:{local_port}"
+        }
 
+        r = requests.get(
+            "https://www.google.com/generate_204",
+            proxies=proxies,
+            timeout=8
+        )
 
-def flag(country):
-    return "".join(chr(ord(c) + 127397) for c in country.upper())
-
-
-# ================= PROCESS SERVER =================
-async def process_server(session, line, executor):
-    global counter
-
-    if stop_event.is_set():
-        return
-
-    try:
-        parsed = urlparse(line)
-        host = parsed.hostname
-        port = parsed.port
-
-        if not host or not port:
-            return
-
-        loop = asyncio.get_running_loop()
-        ping = await loop.run_in_executor(executor, tcp_ping, host, port)
-
-        if ping is None or ping > MAX_PING:
-            return
-
-        country = await get_country(session, host)
-        new_name = f"KPOT-{counter:04d}-{flag(country)}-{country}"
-        counter += 1
-
-        base = line.split("#")[0]
-        final = f"{base}#{new_name}"
-
-        valid_servers.append(final)
-
-        if len(valid_servers) >= MAX_SERVERS:
-            stop_event.set()
+        return r.status_code in (200, 204)
 
     except:
-        pass
+        return False
+
+    finally:
+        proc.kill()
 
 
-# ================= FETCH SOURCE =================
 async def fetch_source(session, url):
     try:
-        async with session.get(url, timeout=15) as r:
+        async with session.get(url, timeout=20) as r:
             text = await r.text()
             try:
-                return base64.b64decode(text).decode("utf-8", errors="ignore")
+                return base64.b64decode(text).decode()
             except:
                 return text
     except:
         return ""
 
 
-# ================= MAIN =================
 async def main():
-    connector = aiohttp.TCPConnector(limit=GITHUB_THREADS, ssl=False)
-    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession() as session:
 
-    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-
-        with open("sources.txt", "r", encoding="utf-8") as f:
+        with open("sources.txt") as f:
             sources = [s.strip() for s in f if s.strip()]
 
         texts = await asyncio.gather(
@@ -124,22 +128,51 @@ async def main():
 
         all_vless = list(set(all_vless))
 
+        loop = asyncio.get_running_loop()
         executor = ThreadPoolExecutor(max_workers=PING_THREADS)
 
         tasks = []
         for line in all_vless:
-            if stop_event.is_set():
+            parsed = urlparse(line)
+            if not parsed.hostname or not parsed.port:
+                continue
+            tasks.append(
+                loop.run_in_executor(
+                    executor,
+                    tcp_ping,
+                    parsed.hostname,
+                    parsed.port
+                )
+            )
+
+        pings = await asyncio.gather(*tasks)
+
+        fast = []
+        for line, ping in zip(all_vless, pings):
+            if ping and ping <= MAX_PING:
+                fast.append((line, ping))
+
+        fast.sort(key=lambda x: x[1])
+        fast = fast[:FAST_STAGE_LIMIT]
+
+        print("После пинга:", len(fast))
+
+        final = []
+        for i, (line, _) in enumerate(fast):
+            if len(final) >= MAX_FINAL:
                 break
-            tasks.append(process_server(session, line, executor))
+            if test_vless_google(line, i):
+                final.append(line)
+                print("OK:", len(final))
 
-        await asyncio.gather(*tasks)
+        with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+            f.write(HEADER + "\n")
+            for i, line in enumerate(final, 1):
+                base = line.split("#")[0]
+                name = f"KPOT-{i:04d}"
+                f.write(f"{base}#{name}\n")
 
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write(HEADER.strip() + "\n\n")
-        for s in valid_servers:
-            f.write(s + "\n")
-
-    print(f"Готово. Найдено серверов: {len(valid_servers)}")
+        print("Итог:", len(final))
 
 
 if __name__ == "__main__":
