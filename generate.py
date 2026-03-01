@@ -3,17 +3,20 @@ import aiohttp
 import base64
 import re
 import socket
-import subprocess
+import time
 import json
+import subprocess
+import requests
 import os
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 
-INPUT_FILE = "sources.txt"
-OUTPUT_FILE = "Molestunnels.txt"
-MAX_SERVERS = 1000
+MAX_FINAL = 1000
+FAST_STAGE_LIMIT = 2000
 MAX_PING = 1000
-PING_CONCURRENCY = 200
+PING_THREADS = 400
+XRAY_PARALLEL = 20
+OUTPUT_FILE = "Molestunnels.txt"
 
 HEADER = """#profile-title:🇷🇺КРОТовыеТОННЕЛИ🇷🇺
 #subscription-userinfo: upload=0; download=0; total=0; expire=0
@@ -23,7 +26,6 @@ HEADER = """#profile-title:🇷🇺КРОТовыеТОННЕЛИ🇷🇺
 #announce:🇷🇺КРОТовыеТОННЕЛИ🇷🇺
 """
 
-# ===== ФЛАГИ СТРАН =====
 FLAG_MAP = {
     "RU": "🇷🇺 Россия",
     "DE": "🇩🇪 Германия",
@@ -39,73 +41,24 @@ FLAG_MAP = {
     "SG": "🇸🇬 Сингапур",
 }
 
-# ===== Загрузка ссылок =====
-async def fetch(session, url):
+# ===== БЫСТРЫЙ TCP PING =====
+def tcp_ping(host, port):
     try:
-        async with session.get(url, timeout=15) as resp:
-            return await resp.text()
-    except:
-        return ""
-
-async def load_sources():
-    if not os.path.exists(INPUT_FILE):
-        return []
-
-    with open(INPUT_FILE, "r", encoding="utf-8") as f:
-        urls = [line.strip() for line in f if line.strip()]
-
-    async with aiohttp.ClientSession() as session:
-        tasks = [fetch(session, url) for url in urls]
-        results = await asyncio.gather(*tasks)
-
-    keys = []
-    for data in results:
-        if not data:
-            continue
-        try:
-            decoded = base64.b64decode(data).decode()
-        except:
-            decoded = data
-        keys.extend(decoded.splitlines())
-
-    return keys
-
-# ===== Парсинг VLESS =====
-def parse_vless(line):
-    if not line.startswith("vless://"):
-        return None
-    try:
-        parsed = urlparse(line)
-        host = parsed.hostname
-        port = parsed.port
-        return host, port
+        start = time.time()
+        with socket.create_connection((host, port), timeout=1.5):
+            return int((time.time() - start) * 1000)
     except:
         return None
 
-# ===== Пинг =====
-async def ping(host):
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "ping", "-c", "1", "-W", "1", host,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, _ = await proc.communicate()
-        output = stdout.decode()
+# ===== ПРОВЕРКА GOOGLE =====
+def check_google(vless_url, index):
+    local_port = 30000 + index
+    parsed = urlparse(vless_url)
 
-        match = re.search(r'time=(\d+\.?\d*)', output)
-        if match:
-            return float(match.group(1))
-    except:
-        pass
-    return None
-
-# ===== Проверка выхода в интернет через Xray =====
-async def check_google(vless_key):
     config = {
         "log": {"loglevel": "none"},
         "inbounds": [{
-            "port": 10808,
+            "port": local_port,
             "listen": "127.0.0.1",
             "protocol": "socks",
             "settings": {"udp": False}
@@ -114,10 +67,10 @@ async def check_google(vless_key):
             "protocol": "vless",
             "settings": {
                 "vnext": [{
-                    "address": parse_vless(vless_key)[0],
-                    "port": parse_vless(vless_key)[1],
+                    "address": parsed.hostname,
+                    "port": parsed.port,
                     "users": [{
-                        "id": vless_key.split("://")[1].split("@")[0],
+                        "id": parsed.username,
                         "encryption": "none"
                     }]
                 }]
@@ -126,83 +79,135 @@ async def check_google(vless_key):
         }]
     }
 
-    with open("test.json", "w") as f:
+    config_file = f"xray_{index}.json"
+    with open(config_file, "w") as f:
         json.dump(config, f)
 
-    proc = await asyncio.create_subprocess_exec(
-        "./xray", "-config", "test.json",
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL
+    proc = subprocess.Popen(
+        ["./xray", "run", "-c", config_file],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
     )
 
-    await asyncio.sleep(2)
-
     try:
-        test = await asyncio.create_subprocess_exec(
-            "curl", "--socks5", "127.0.0.1:10808",
-            "--max-time", "5",
-            "https://www.google.com",
-            stdout=asyncio.subprocess.PIPE
+        for _ in range(10):
+            try:
+                with socket.create_connection(("127.0.0.1", local_port), timeout=1):
+                    break
+            except:
+                time.sleep(0.2)
+        else:
+            return False
+
+        proxies = {
+            "http": f"socks5h://127.0.0.1:{local_port}",
+            "https": f"socks5h://127.0.0.1:{local_port}"
+        }
+
+        r = requests.get(
+            "https://www.google.com/generate_204",
+            proxies=proxies,
+            timeout=5
         )
-        stdout, _ = await test.communicate()
-        success = b"html" in stdout.lower()
+
+        return r.status_code in (200, 204)
+
     except:
-        success = False
+        return False
 
-    proc.kill()
-    await proc.wait()
+    finally:
+        proc.kill()
+        if os.path.exists(config_file):
+            os.remove(config_file)
 
-    return success
-
-# ===== Основная логика =====
+# ===== MAIN =====
 async def main():
-    print("Загрузка ключей...")
-    keys = await load_sources()
+    async with aiohttp.ClientSession() as session:
+        with open("sources.txt") as f:
+            sources = [s.strip() for s in f if s.strip()]
 
-    keys = list(set([k.strip() for k in keys if k.startswith("vless://")]))
+        texts = await asyncio.gather(
+            *[session.get(url) for url in sources]
+        )
 
-    print(f"Найдено VLESS: {len(keys)}")
+        all_vless = []
+        for resp in texts:
+            try:
+                text = await resp.text()
+                try:
+                    text = base64.b64decode(text).decode()
+                except:
+                    pass
+                all_vless += re.findall(r"vless://[^\s]+", text)
+            except:
+                pass
 
-    valid = []
-    semaphore = asyncio.Semaphore(PING_CONCURRENCY)
+        all_vless = list(set(all_vless))
+        print("Всего:", len(all_vless))
 
-    async def check_key(key):
-        async with semaphore:
-            parsed = parse_vless(key)
-            if not parsed:
-                return None
+        loop = asyncio.get_running_loop()
+        executor = ThreadPoolExecutor(max_workers=PING_THREADS)
 
-            host, port = parsed
-            ping_time = await ping(host)
-            if ping_time and ping_time <= MAX_PING:
-                if await check_google(key):
-                    return (key, ping_time)
-        return None
+        ping_tasks = []
+        for line in all_vless:
+            parsed = urlparse(line)
+            if parsed.hostname and parsed.port:
+                ping_tasks.append(
+                    loop.run_in_executor(
+                        executor,
+                        tcp_ping,
+                        parsed.hostname,
+                        parsed.port
+                    )
+                )
+            else:
+                ping_tasks.append(asyncio.sleep(0, result=None))
 
-    tasks = [check_key(k) for k in keys]
-    for future in asyncio.as_completed(tasks):
-        result = await future
-        if result:
-            valid.append(result)
-            if len(valid) >= MAX_SERVERS:
-                break
+        pings = await asyncio.gather(*ping_tasks)
 
-    valid.sort(key=lambda x: x[1])
-    valid = valid[:MAX_SERVERS]
+        fast = []
+        for line, ping in zip(all_vless, pings):
+            if ping and ping <= MAX_PING:
+                fast.append((line, ping))
 
-    print(f"Отобрано серверов: {len(valid)}")
+        fast.sort(key=lambda x: x[1])
+        fast = fast[:FAST_STAGE_LIMIT]
 
-    # ===== Формирование итогового файла =====
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write(HEADER)
+        print("После пинга:", len(fast))
 
-        for i, (key, ping_time) in enumerate(valid, 1):
-            country_code = key.upper().split("#")[-1][:2]
-            country = FLAG_MAP.get(country_code, "🌍 Unknown")
-            name = f"KPOT-{i:04d} | {country} | {int(ping_time)}ms"
-            if "#" in key:
-                key = key.split("#")[0]
-            f.write(f"{key}#{name}\n")
+        final = []
+        index = 0
+
+        with ThreadPoolExecutor(max_workers=XRAY_PARALLEL) as pool:
+            futures = []
+
+            for line, ping in fast:
+                if len(final) >= MAX_FINAL:
+                    break
+
+                futures.append(pool.submit(check_google, line, index))
+                index += 1
+
+                if len(futures) >= XRAY_PARALLEL:
+                    for f, (vless_line, ping_val) in zip(futures, fast[:len(futures)]):
+                        if f.result():
+                            final.append((vless_line, ping_val))
+                            print("OK:", len(final))
+                    futures.clear()
+
+        final.sort(key=lambda x: x[1])
+        final = final[:MAX_FINAL]
+
+        print("Итог:", len(final))
+
+        with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+            f.write(HEADER + "\n")
+            for i, (line, ping) in enumerate(final, 1):
+                base = line.split("#")[0]
+                code = line.upper().split("#")[-1][:2]
+                country = FLAG_MAP.get(code, "🌍 Unknown")
+                name = f"KPOT-{i:04d} | {country} | {ping}ms"
+                f.write(f"{base}#{name}\n")
 
 if __name__ == "__main__":
     asyncio.run(main())
