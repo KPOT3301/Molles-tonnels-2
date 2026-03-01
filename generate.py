@@ -9,13 +9,13 @@ import subprocess
 import requests
 import os
 from urllib.parse import urlparse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 MAX_FINAL = 1000
 FAST_STAGE_LIMIT = 2000
 MAX_PING = 1000
-PING_THREADS = 400
-XRAY_PARALLEL = 20
+PING_THREADS = 500
+XRAY_PARALLEL = 30
 OUTPUT_FILE = "Molestunnels.txt"
 
 HEADER = """#profile-title:🇷🇺КРОТовыеТОННЕЛИ🇷🇺
@@ -41,18 +41,18 @@ FLAG_MAP = {
     "SG": "🇸🇬 Сингапур",
 }
 
-# ===== БЫСТРЫЙ TCP PING =====
+# ===== СУПЕР БЫСТРЫЙ TCP PING =====
 def tcp_ping(host, port):
     try:
         start = time.time()
-        with socket.create_connection((host, port), timeout=1.5):
+        with socket.create_connection((host, port), timeout=1.2):
             return int((time.time() - start) * 1000)
     except:
         return None
 
 # ===== ПРОВЕРКА GOOGLE =====
 def check_google(vless_url, index):
-    local_port = 30000 + index
+    local_port = 40000 + index
     parsed = urlparse(vless_url)
 
     config = {
@@ -90,12 +90,12 @@ def check_google(vless_url, index):
     )
 
     try:
-        for _ in range(10):
+        for _ in range(8):
             try:
-                with socket.create_connection(("127.0.0.1", local_port), timeout=1):
+                with socket.create_connection(("127.0.0.1", local_port), timeout=0.8):
                     break
             except:
-                time.sleep(0.2)
+                time.sleep(0.15)
         else:
             return False
 
@@ -107,7 +107,7 @@ def check_google(vless_url, index):
         r = requests.get(
             "https://www.google.com/generate_204",
             proxies=proxies,
-            timeout=5
+            timeout=4
         )
 
         return r.status_code in (200, 204)
@@ -126,14 +126,14 @@ async def main():
         with open("sources.txt") as f:
             sources = [s.strip() for s in f if s.strip()]
 
-        texts = await asyncio.gather(
+        responses = await asyncio.gather(
             *[session.get(url) for url in sources]
         )
 
         all_vless = []
-        for resp in texts:
+        for r in responses:
             try:
-                text = await resp.text()
+                text = await r.text()
                 try:
                     text = base64.b64decode(text).decode()
                 except:
@@ -143,7 +143,7 @@ async def main():
                 pass
 
         all_vless = list(set(all_vless))
-        print("Всего:", len(all_vless))
+        print("Всего найдено:", len(all_vless))
 
         loop = asyncio.get_running_loop()
         executor = ThreadPoolExecutor(max_workers=PING_THREADS)
@@ -176,24 +176,23 @@ async def main():
         print("После пинга:", len(fast))
 
         final = []
-        index = 0
 
         with ThreadPoolExecutor(max_workers=XRAY_PARALLEL) as pool:
-            futures = []
+            futures = {
+                pool.submit(check_google, line, i): (line, ping)
+                for i, (line, ping) in enumerate(fast)
+            }
 
-            for line, ping in fast:
+            for future in as_completed(futures):
                 if len(final) >= MAX_FINAL:
                     break
 
-                futures.append(pool.submit(check_google, line, index))
-                index += 1
+                result = future.result()
+                line, ping = futures[future]
 
-                if len(futures) >= XRAY_PARALLEL:
-                    for f, (vless_line, ping_val) in zip(futures, fast[:len(futures)]):
-                        if f.result():
-                            final.append((vless_line, ping_val))
-                            print("OK:", len(final))
-                    futures.clear()
+                if result:
+                    final.append((line, ping))
+                    print("OK:", len(final))
 
         final.sort(key=lambda x: x[1])
         final = final[:MAX_FINAL]
@@ -202,6 +201,7 @@ async def main():
 
         with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
             f.write(HEADER + "\n")
+
             for i, (line, ping) in enumerate(final, 1):
                 base = line.split("#")[0]
                 code = line.upper().split("#")[-1][:2]
