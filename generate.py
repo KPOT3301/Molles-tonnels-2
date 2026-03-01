@@ -8,13 +8,10 @@ import time
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 
-# ================= НАСТРОЙКИ =================
-
 MAX_SERVERS = 3000
 MAX_PING = 1000
-PING_THREADS = 400
+PING_THREADS = 300
 GITHUB_THREADS = 50
-GOOGLE_TEST_TIMEOUT = 5
 
 OUTPUT_FILE = "Molestunnels.txt"
 
@@ -30,8 +27,8 @@ stop_event = asyncio.Event()
 valid_servers = []
 counter = 1
 
-# ================= PING =================
 
+# ================= TCP PING =================
 def tcp_ping(host, port):
     try:
         start = time.time()
@@ -40,14 +37,14 @@ def tcp_ping(host, port):
     except:
         return None
 
-# ================= GOOGLE CHECK =================
 
-async def check_google(host, port):
+# ================= GOOGLE TEST =================
+async def google_test(host, port):
     try:
         context = ssl.create_default_context()
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port, ssl=context),
-            timeout=GOOGLE_TEST_TIMEOUT
+            timeout=4
         )
         writer.write(b"GET / HTTP/1.1\r\nHost: www.google.com\r\n\r\n")
         await writer.drain()
@@ -58,22 +55,26 @@ async def check_google(host, port):
     except:
         return False
 
-# ================= СТРАНА =================
 
+# ================= COUNTRY =================
 async def get_country(session, ip):
     try:
-        async with session.get(f"http://ip-api.com/json/{ip}?fields=countryCode", timeout=3) as r:
+        async with session.get(
+            f"http://ip-api.com/json/{ip}?fields=countryCode",
+            timeout=3
+        ) as r:
             data = await r.json()
             return data.get("countryCode", "UN")
     except:
         return "UN"
 
-def flag_emoji(country):
+
+def flag(country):
     return "".join(chr(ord(c) + 127397) for c in country.upper())
 
-# ================= ПРОВЕРКА СЕРВЕРА =================
 
-async def process_vless(session, line, executor):
+# ================= PROCESS SERVER =================
+async def process_server(session, line, executor):
     global counter
 
     if stop_event.is_set():
@@ -93,13 +94,11 @@ async def process_vless(session, line, executor):
         if ping is None or ping > MAX_PING:
             return
 
-        if not await check_google(host, port):
+        if not await google_test(host, port):
             return
 
         country = await get_country(session, host)
-        flag = flag_emoji(country)
-
-        new_name = f"KPOT-{counter:04d}-{flag}-{country}"
+        new_name = f"KPOT-{counter:04d}-{flag(country)}-{country}"
         counter += 1
 
         base = line.split("#")[0]
@@ -113,25 +112,22 @@ async def process_vless(session, line, executor):
     except:
         pass
 
-# ================= ЗАГРУЗКА ИСТОЧНИКОВ =================
 
+# ================= FETCH SOURCE =================
 async def fetch_source(session, url):
     try:
         async with session.get(url, timeout=15) as r:
             text = await r.text()
-
             try:
-                decoded = base64.b64decode(text).decode("utf-8", errors="ignore")
-                return decoded
+                return base64.b64decode(text).decode("utf-8", errors="ignore")
             except:
                 return text
     except:
         return ""
 
+
 # ================= MAIN =================
-
 async def main():
-
     connector = aiohttp.TCPConnector(limit=GITHUB_THREADS, ssl=False)
     timeout = aiohttp.ClientTimeout(total=30)
 
@@ -140,24 +136,15 @@ async def main():
         with open("sources.txt", "r", encoding="utf-8") as f:
             sources = [s.strip() for s in f if s.strip()]
 
-        print(f"Найдено источников: {len(sources)}")
+        texts = await asyncio.gather(
+            *[fetch_source(session, url) for url in sources]
+        )
 
-        # Быстро загружаем все источники
-        texts = await asyncio.gather(*[
-            fetch_source(session, url)
-            for url in sources
-        ])
-
-        # Собираем только VLESS
         all_vless = []
         for text in texts:
-            matches = re.findall(r"vless://[^\s]+", text)
-            all_vless.extend(matches)
+            all_vless += re.findall(r"vless://[^\s]+", text)
 
-        # Удаляем дубли
         all_vless = list(set(all_vless))
-
-        print(f"Найдено VLESS ключей: {len(all_vless)}")
 
         executor = ThreadPoolExecutor(max_workers=PING_THREADS)
 
@@ -165,18 +152,17 @@ async def main():
         for line in all_vless:
             if stop_event.is_set():
                 break
-            tasks.append(process_vless(session, line, executor))
+            tasks.append(process_server(session, line, executor))
 
         await asyncio.gather(*tasks)
-
-    # ================= СОХРАНЕНИЕ =================
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write(HEADER.strip() + "\n\n")
         for s in valid_servers:
             f.write(s + "\n")
 
-    print(f"\nГотово. Добавлено серверов: {len(valid_servers)}")
+    print(f"Готово. Найдено серверов: {len(valid_servers)}")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
