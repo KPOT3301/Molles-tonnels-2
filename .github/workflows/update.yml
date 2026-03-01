@@ -3,10 +3,7 @@ name: Update VLESS Subscription
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 19 * * *'   # 00:00 Екатеринбург (UTC+5)
-
-permissions:
-  contents: write
+    - cron: '0 19 * * 0,2,4'
 
 jobs:
   update:
@@ -23,16 +20,16 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests
+          python -m pip install --upgrade pip
+          pip install aiohttp
 
       - name: Run generator
-        run: |
-          python generate.py
+        run: python generate.py
 
       - name: Commit and push if changed
         run: |
-          git config --global user.name "actions-user"
-          git config --global user.email "actions@github.com"
-          git add Molestunnels.txt Molestunnels_base64.txt
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git add Molestunnels.txt
           git diff --quiet && git diff --staged --quiet || git commit -m "Auto update VLESS list"
           git push
