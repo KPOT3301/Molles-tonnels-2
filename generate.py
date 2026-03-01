@@ -3,7 +3,6 @@ import aiohttp
 import base64
 import re
 import socket
-import ssl
 import time
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
@@ -36,24 +35,6 @@ def tcp_ping(host, port):
             return int((time.time() - start) * 1000)
     except:
         return None
-
-
-# ================= GOOGLE TEST =================
-async def google_test(host, port):
-    try:
-        context = ssl.create_default_context()
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port, ssl=context),
-            timeout=4
-        )
-        writer.write(b"GET / HTTP/1.1\r\nHost: www.google.com\r\n\r\n")
-        await writer.drain()
-        data = await asyncio.wait_for(reader.read(100), timeout=3)
-        writer.close()
-        await writer.wait_closed()
-        return b"200" in data
-    except:
-        return False
 
 
 # ================= COUNTRY =================
@@ -92,9 +73,6 @@ async def process_server(session, line, executor):
         ping = await loop.run_in_executor(executor, tcp_ping, host, port)
 
         if ping is None or ping > MAX_PING:
-            return
-
-        if not await google_test(host, port):
             return
 
         country = await get_country(session, host)
