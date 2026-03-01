@@ -3,6 +3,7 @@ import base64
 import socket
 import time
 import threading
+import ssl
 from urllib.parse import urlparse, urlunparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -12,7 +13,7 @@ OUTPUT_BASE64 = "Molestunnels_base64.txt"
 
 MAX_SERVERS = 3000
 MAX_PING = 1000
-MAX_WORKERS = 200
+PING_WORKERS = 200
 DOWNLOAD_WORKERS = 20
 
 HEADER = """#profile-title:🇷🇺КРОТовыеТОННЕЛИ🇷🇺
@@ -86,9 +87,8 @@ def get_country_info(ip):
         )
         data = r.json()
         if data.get("countryCode"):
-            flag = chr(127397 + ord(data["countryCode"][0])) + chr(
-                127397 + ord(data["countryCode"][1])
-            )
+            code = data["countryCode"]
+            flag = chr(127397 + ord(code[0])) + chr(127397 + ord(code[1]))
             result = (flag, data["country"])
         else:
             result = ("🏳", "UNKNOWN")
@@ -111,8 +111,13 @@ def ping_server(server):
 
     try:
         start = time.time()
-        sock = socket.create_connection((host, port), timeout=3)
-        sock.close()
+
+        context = ssl.create_default_context()
+        with socket.create_connection((host, port), timeout=3) as sock:
+            with context.wrap_socket(sock, server_hostname=host) as ssock:
+                ssock.settimeout(3)
+                ssock.do_handshake()
+
         ping = int((time.time() - start) * 1000)
 
         if ping <= MAX_PING:
@@ -134,7 +139,7 @@ def rename_server(server, index, flag, country):
 def main():
     urls = read_sources()
 
-    # 🔥 Параллельная загрузка sources
+    # Параллельная загрузка sources
     all_servers = []
     with ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS) as executor:
         futures = [executor.submit(download, url) for url in urls]
@@ -148,8 +153,8 @@ def main():
 
     valid_servers = []
 
-    # 🚀 Параллельный пинг
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    # Параллельный пинг + TLS проверка
+    with ThreadPoolExecutor(max_workers=PING_WORKERS) as executor:
         futures = {executor.submit(ping_server, s): s for s in unique_servers}
 
         for future in as_completed(futures):
@@ -173,7 +178,7 @@ def main():
     ):
         final_servers.append(rename_server(server, i, flag, country))
 
-    print(f"Оставлено: {len(final_servers)}")
+    print(f"Оставлено серверов: {len(final_servers)}")
 
     if final_servers:
         full_text = HEADER + "\n" + "\n".join(final_servers)
