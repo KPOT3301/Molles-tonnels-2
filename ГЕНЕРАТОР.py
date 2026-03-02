@@ -5,6 +5,10 @@ import socket
 import requests
 from urllib.parse import urlparse
 
+# =========================
+# CONFIG
+# =========================
+
 SOURCES_FILE = "sslist.txt"
 OUTPUT_FILE = "Molestunnels.txt"
 BASE64_FILE = "Molestunnels_base64.txt"
@@ -13,16 +17,15 @@ FETCH_TIMEOUT = 10
 CHECK_TIMEOUT = 2.5
 MAX_CONCURRENT_CHECKS = 800
 
-
 # =========================
-# FETCH
+# FETCH SOURCES
 # =========================
 
 def fetch_source(url):
     try:
         r = requests.get(url.strip(), timeout=FETCH_TIMEOUT)
         if r.status_code == 200:
-            return r.text
+            return r.text.strip()
     except:
         return ""
     return ""
@@ -42,9 +45,8 @@ def extract_configs(text):
     pattern = r"(vless://[^\s]+|vmess://[^\s]+|ss://[^\s]+|trojan://[^\s]+)"
     return re.findall(pattern, text)
 
-
 # =========================
-# PARSE
+# PARSE HOST PORT
 # =========================
 
 def parse_host_port(config):
@@ -60,9 +62,8 @@ def parse_host_port(config):
     except:
         return None, None
 
-
 # =========================
-# CHECK
+# CHECKING
 # =========================
 
 async def async_check(host, port):
@@ -92,18 +93,18 @@ async def check_alive(config, semaphore):
         return None
 
     async with semaphore:
+
         # 1️⃣ первая попытка
         ok = await async_check(host, port)
 
         if not ok:
-            # пауза 0.5 сек
             await asyncio.sleep(0.5)
 
             # 2️⃣ вторая попытка
             ok = await async_check(host, port)
 
         if not ok:
-            # fallback обычный сокет
+            # fallback sync
             ok = fallback_check(host, port)
 
         if ok:
@@ -111,17 +112,28 @@ async def check_alive(config, semaphore):
 
     return None
 
-
 # =========================
 # MAIN
 # =========================
 
 async def main():
-    print("Reading sources...")
-    with open(SOURCES_FILE, "r", encoding="utf-8") as f:
-        sources = [line.strip() for line in f if line.strip()]
 
-    print(f"Fetching {len(sources)} sources...")
+    print("Reading sources...")
+
+    try:
+        with open(SOURCES_FILE, "r", encoding="utf-8") as f:
+            sources = [line.strip() for line in f if line.strip()]
+    except:
+        print("sslist.txt not found.")
+        return
+
+    print(f"Sources count: {len(sources)}")
+
+    if not sources:
+        print("No sources found.")
+        return
+
+    print("Fetching sources...")
 
     all_text = ""
     for src in sources:
@@ -131,13 +143,19 @@ async def main():
             all_text += data + "\n"
 
     print("Extracting configs...")
+
     configs = list(set(extract_configs(all_text)))
 
-    print(f"Total unique configs: {len(configs)}")
+    print(f"Unique configs: {len(configs)}")
+
+    if not configs:
+        print("No configs extracted.")
+        return
 
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_CHECKS)
 
-    print("Checking alive (double check mode)...")
+    print("Checking alive (double-check mode)...")
+
     tasks = [check_alive(cfg, semaphore) for cfg in configs]
     results = await asyncio.gather(*tasks)
 
@@ -145,7 +163,13 @@ async def main():
 
     print(f"Alive configs: {len(alive)}")
 
-    alive.sort()
+    # 🛡 Защита от пустой подписки
+    if len(alive) == 0:
+        print("WARNING: No alive configs found!")
+        print("Aborting overwrite to protect existing subscription.")
+        exit(1)
+
+    alive = sorted(set(alive))
 
     print("Writing files (overwrite)...")
 
@@ -157,7 +181,7 @@ async def main():
     with open(BASE64_FILE, "w", encoding="utf-8") as f:
         f.write(base64_data)
 
-    print("Done.")
+    print("Done successfully.")
 
 
 if __name__ == "__main__":
