@@ -17,15 +17,6 @@ TIMEOUT = 1.5
 
 PROFILE_TITLE = "🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
 
-HEADERS = [
-f"#profile-title:{PROFILE_TITLE}",
-"#subscription-userinfo: upload=0; download=0; total=0; expire=0",
-"#profile-update-interval: 1",
-f"#support-url:{PROFILE_TITLE}",
-f"#profile-web-page-url:{PROFILE_TITLE}",
-f"#announce:{PROFILE_TITLE}"
-]
-
 
 def extract_vless(text):
     return list(set(re.findall(r'vless://[^\s]+', text)))
@@ -157,6 +148,16 @@ async def main():
         exit(1)
 
     alive.sort()
+
+    # ===== АВТОМАТИЧЕСКИЙ КРАСИВЫЙ АНОНС =====
+    HEADERS = [
+        f"#profile-title:{PROFILE_TITLE}",
+        "#subscription-userinfo: upload=0; download=0; total=0; expire=0",
+        "#profile-update-interval: 1",
+        f"#support-url:{PROFILE_TITLE}",
+        f"#profile-web-page-url:{PROFILE_TITLE}",
+        f"#announce: 🚀 АКТИВНО: {len(alive)} | 📅 {update_date}"
+    ]
 
     print("Writing files...")
 
