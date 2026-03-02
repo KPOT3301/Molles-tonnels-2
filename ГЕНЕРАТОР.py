@@ -16,6 +16,7 @@ BASE64_FILE = "Molestunnels_base64.txt"
 FETCH_TIMEOUT = 10
 CHECK_TIMEOUT = 2.5
 MAX_CONCURRENT_CHECKS = 800
+MAX_ALIVE = 500  # 🔥 Лимит живых серверов (500)
 
 # =========================
 # FETCH SOURCES
@@ -93,18 +94,13 @@ async def check_alive(config, semaphore):
         return None
 
     async with semaphore:
-
-        # 1️⃣ первая попытка
         ok = await async_check(host, port)
 
         if not ok:
             await asyncio.sleep(0.5)
-
-            # 2️⃣ вторая попытка
             ok = await async_check(host, port)
 
         if not ok:
-            # fallback sync
             ok = fallback_check(host, port)
 
         if ok:
@@ -127,12 +123,11 @@ async def main():
         print("sslist.txt not found.")
         return
 
-    print(f"Sources count: {len(sources)}")
-
     if not sources:
         print("No sources found.")
         return
 
+    print(f"Sources count: {len(sources)}")
     print("Fetching sources...")
 
     all_text = ""
@@ -143,9 +138,7 @@ async def main():
             all_text += data + "\n"
 
     print("Extracting configs...")
-
     configs = list(set(extract_configs(all_text)))
-
     print(f"Unique configs: {len(configs)}")
 
     if not configs:
@@ -154,24 +147,56 @@ async def main():
 
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_CHECKS)
 
-    print("Checking alive (double-check mode)...")
+    print("Checking alive (early stop mode)...")
 
-    tasks = [check_alive(cfg, semaphore) for cfg in configs]
-    results = await asyncio.gather(*tasks)
+    alive = []
+    tasks = set()
 
-    alive = [r for r in results if r]
+    for cfg in configs:
+        task = asyncio.create_task(check_alive(cfg, semaphore))
+        tasks.add(task)
 
-    print(f"Alive configs: {len(alive)}")
+        # Обработка завершённых задач
+        done, tasks = await asyncio.wait(
+            tasks,
+            timeout=0,
+            return_when=asyncio.FIRST_COMPLETED
+        )
 
-    # 🛡 Защита от пустой подписки
+        for d in done:
+            result = d.result()
+            if result:
+                alive.append(result)
+
+                if len(alive) >= MAX_ALIVE:
+                    print(f"Reached {MAX_ALIVE} alive configs. Stopping early.")
+                    for t in tasks:
+                        t.cancel()
+                    tasks.clear()
+                    break
+
+        if len(alive) >= MAX_ALIVE:
+            break
+
+    # Дожимаем оставшиеся выполненные задачи
+    for t in tasks:
+        try:
+            result = await t
+            if result and len(alive) < MAX_ALIVE:
+                alive.append(result)
+        except:
+            pass
+
+    alive = sorted(set(alive))
+
+    print(f"Final alive configs: {len(alive)}")
+
     if len(alive) == 0:
         print("WARNING: No alive configs found!")
         print("Aborting overwrite to protect existing subscription.")
         exit(1)
 
-    alive = sorted(set(alive))
-
-    print("Writing files (overwrite)...")
+    print("Writing files...")
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(alive))
