@@ -2,9 +2,10 @@ import asyncio
 import aiohttp
 import base64
 import socket
-import time
 import re
 from urllib.parse import urlparse
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 INPUT_FILE = "sslist.txt"
 OUTPUT_FILE = "Molestunnels.txt"
@@ -14,13 +15,15 @@ MAX_WORKING = 500
 CONCURRENCY = 300
 TIMEOUT = 1.5
 
+PROFILE_TITLE = "🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
+
 HEADERS = [
-"#profile-title:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
+f"#profile-title:{PROFILE_TITLE}",
 "#subscription-userinfo: upload=0; download=0; total=0; expire=0",
 "#profile-update-interval: 1",
-"#support-url:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
-"#profile-web-page-url:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
-"#announce:🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
+f"#support-url:{PROFILE_TITLE}",
+f"#profile-web-page-url:{PROFILE_TITLE}",
+f"#announce:{PROFILE_TITLE}"
 ]
 
 
@@ -63,7 +66,7 @@ async def check_once(host, port):
         return False
 
 
-async def check_server(config, semaphore, session):
+async def check_server(config, semaphore, session, update_date):
     if check_server.counter >= MAX_WORKING:
         return None
 
@@ -100,7 +103,7 @@ async def check_server(config, semaphore, session):
             print(f"Alive ({number}): {host}:{port} {flag}")
 
             clean_config = config.split("#")[0]
-            return f"{clean_config}#{flag} {number:03d}"
+            return f"{clean_config}#{flag} {number:03d} | {update_date}"
 
     except:
         return None
@@ -119,6 +122,10 @@ async def main():
         print("No sslist.txt found.")
         return
 
+    # Московская дата
+    moscow_time = datetime.now(ZoneInfo("Europe/Moscow"))
+    update_date = moscow_time.strftime("%Y-%m-%d")
+
     async with aiohttp.ClientSession() as session:
         tasks = [fetch(session, url) for url in sources]
         results = await asyncio.gather(*tasks)
@@ -136,7 +143,7 @@ async def main():
 
         print("Checking servers...")
 
-        tasks = [check_server(cfg, semaphore, session) for cfg in all_configs]
+        tasks = [check_server(cfg, semaphore, session, update_date) for cfg in all_configs]
         checked = await asyncio.gather(*tasks)
 
     alive = [c for c in checked if c is not None]
