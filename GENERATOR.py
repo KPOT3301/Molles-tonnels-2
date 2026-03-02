@@ -70,7 +70,7 @@ async def check_once(host, port):
 
 # -------------------- SERVER CHECK --------------------
 
-async def check_server(config, semaphore, session, update_date):
+async def check_server(config, semaphore, session):
 
     try:
         parsed = urlparse(config)
@@ -126,8 +126,9 @@ async def main():
         print("No sslist.txt found.")
         return
 
+    # Дата ДД-ММ-ГГГГ
     moscow_time = datetime.now(ZoneInfo("Europe/Moscow"))
-    update_date = moscow_time.strftime("%Y-%m-%d")
+    update_date = moscow_time.strftime("%d-%m-%Y")
 
     async with aiohttp.ClientSession() as session:
 
@@ -149,7 +150,7 @@ async def main():
         print("Checking servers (with latency)...")
 
         tasks = [
-            check_server(cfg, semaphore, session, update_date)
+            check_server(cfg, semaphore, session)
             for cfg in all_configs
         ]
 
@@ -161,10 +162,10 @@ async def main():
         print("WARNING: No alive configs found!")
         return
 
-    # 🔥 СОРТИРОВКА ПО СКОРОСТИ
+    # Сортировка по скорости
     alive.sort(key=lambda x: x["latency"])
 
-    # 💎 Берём самые быстрые 500
+    # Берём топ 500
     alive = alive[:MAX_WORKING]
 
     print(f"Selected fastest: {len(alive)}")
@@ -173,7 +174,7 @@ async def main():
 
     for idx, item in enumerate(alive, start=1):
         formatted.append(
-            f'{item["config"]}#{item["flag"]} СЕРВЕР {idx:03d} | {int(item["latency"])}ms | ОБНОВЛЕН {update_date}'
+            f'{item["config"]}#{item["flag"]} СЕРВЕР {idx:03d} | ОБНОВЛЕН {update_date}'
         )
 
     # -------------------- HEADERS --------------------
