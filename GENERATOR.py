@@ -103,7 +103,8 @@ async def check_server(config, semaphore, session, update_date):
             print(f"Alive ({number}): {host}:{port} {flag}")
 
             clean_config = config.split("#")[0]
-            return f"{clean_config}#{flag} {number:03d} | {update_date}"
+
+            return f"{clean_config}#{flag} СЕРВЕР {number:03d} | ОБНОВЛЕН {update_date}"
 
     except:
         return None
