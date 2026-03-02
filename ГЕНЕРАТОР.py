@@ -16,7 +16,20 @@ BASE64_FILE = "Molestunnels_base64.txt"
 FETCH_TIMEOUT = 10
 CHECK_TIMEOUT = 2.5
 MAX_CONCURRENT_CHECKS = 800
-MAX_ALIVE = 500  # 🔥 Лимит живых серверов (500)
+MAX_ALIVE = 500  # Лимит живых VLESS
+
+# =========================
+# FIXED SUBSCRIPTION HEADER
+# =========================
+
+FIXED_HEADER = [
+"#profile-title:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
+"#subscription-userinfo: upload=0; download=0; total=0; expire=0",
+"#profile-update-interval: 1",
+"#support-url:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
+"#profile-web-page-url:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
+"#announce:🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
+]
 
 # =========================
 # FETCH SOURCES
@@ -42,8 +55,8 @@ def decode_if_base64(text):
     return text
 
 
-def extract_configs(text):
-    pattern = r"(vless://[^\s]+|vmess://[^\s]+|ss://[^\s]+|trojan://[^\s]+)"
+def extract_vless(text):
+    pattern = r"(vless://[^\s]+)"
     return re.findall(pattern, text)
 
 # =========================
@@ -52,12 +65,6 @@ def extract_configs(text):
 
 def parse_host_port(config):
     try:
-        if config.startswith("vmess://"):
-            decoded = base64.b64decode(config[8:]).decode()
-            host = re.search(r'"add"\s*:\s*"([^"]+)"', decoded).group(1)
-            port = int(re.search(r'"port"\s*:\s*"?(\\d+)"?', decoded).group(1))
-            return host, port
-
         parsed = urlparse(config)
         return parsed.hostname, parsed.port
     except:
@@ -137,17 +144,17 @@ async def main():
             data = decode_if_base64(data)
             all_text += data + "\n"
 
-    print("Extracting configs...")
-    configs = list(set(extract_configs(all_text)))
-    print(f"Unique configs: {len(configs)}")
+    print("Extracting VLESS configs only...")
+    configs = list(set(extract_vless(all_text)))
+    print(f"Unique VLESS configs: {len(configs)}")
 
     if not configs:
-        print("No configs extracted.")
+        print("No VLESS configs extracted.")
         return
 
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_CHECKS)
 
-    print("Checking alive (early stop mode)...")
+    print("Checking alive VLESS (early stop mode)...")
 
     alive = []
     tasks = set()
@@ -156,7 +163,6 @@ async def main():
         task = asyncio.create_task(check_alive(cfg, semaphore))
         tasks.add(task)
 
-        # Обработка завершённых задач
         done, tasks = await asyncio.wait(
             tasks,
             timeout=0,
@@ -169,7 +175,7 @@ async def main():
                 alive.append(result)
 
                 if len(alive) >= MAX_ALIVE:
-                    print(f"Reached {MAX_ALIVE} alive configs. Stopping early.")
+                    print(f"Reached {MAX_ALIVE} alive VLESS. Stopping early.")
                     for t in tasks:
                         t.cancel()
                     tasks.clear()
@@ -178,7 +184,6 @@ async def main():
         if len(alive) >= MAX_ALIVE:
             break
 
-    # Дожимаем оставшиеся выполненные задачи
     for t in tasks:
         try:
             result = await t
@@ -189,19 +194,23 @@ async def main():
 
     alive = sorted(set(alive))
 
-    print(f"Final alive configs: {len(alive)}")
+    print(f"Final alive VLESS configs: {len(alive)}")
 
     if len(alive) == 0:
-        print("WARNING: No alive configs found!")
+        print("WARNING: No alive VLESS found!")
         print("Aborting overwrite to protect existing subscription.")
         exit(1)
 
     print("Writing files...")
 
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write("\n".join(alive))
+    # Добавляем фиксированный header
+    final_content = FIXED_HEADER + alive
+    final_text = "\n".join(final_content)
 
-    base64_data = base64.b64encode("\n".join(alive).encode()).decode()
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        f.write(final_text)
+
+    base64_data = base64.b64encode(final_text.encode()).decode()
 
     with open(BASE64_FILE, "w", encoding="utf-8") as f:
         f.write(base64_data)
