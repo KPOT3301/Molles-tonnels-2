@@ -10,8 +10,8 @@ OUTPUT_FILE = "Molestunnels.txt"
 BASE64_FILE = "Molestunnels_base64.txt"
 
 FETCH_TIMEOUT = 10
-CHECK_TIMEOUT = 1
-MAX_CONCURRENT_CHECKS = 1000
+CHECK_TIMEOUT = 2.5
+MAX_CONCURRENT_CHECKS = 800
 
 
 # =========================
@@ -44,7 +44,7 @@ def extract_configs(text):
 
 
 # =========================
-# PARSE HOST/PORT
+# PARSE
 # =========================
 
 def parse_host_port(config):
@@ -62,31 +62,54 @@ def parse_host_port(config):
 
 
 # =========================
-# ASYNC CHECK
+# CHECK
 # =========================
+
+async def async_check(host, port):
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port),
+            timeout=CHECK_TIMEOUT
+        )
+        writer.close()
+        await writer.wait_closed()
+        return True
+    except:
+        return False
+
+
+def fallback_check(host, port):
+    try:
+        with socket.create_connection((host, port), timeout=CHECK_TIMEOUT):
+            return True
+    except:
+        return False
+
 
 async def check_alive(config, semaphore):
     host, port = parse_host_port(config)
     if not host or not port:
         return None
 
-    try:
-        # DNS filter
-        socket.gethostbyname(host)
-    except:
-        return None
-
     async with semaphore:
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(host, port),
-                timeout=CHECK_TIMEOUT
-            )
-            writer.close()
-            await writer.wait_closed()
+        # 1️⃣ первая попытка
+        ok = await async_check(host, port)
+
+        if not ok:
+            # пауза 0.5 сек
+            await asyncio.sleep(0.5)
+
+            # 2️⃣ вторая попытка
+            ok = await async_check(host, port)
+
+        if not ok:
+            # fallback обычный сокет
+            ok = fallback_check(host, port)
+
+        if ok:
             return config
-        except:
-            return None
+
+    return None
 
 
 # =========================
@@ -108,14 +131,13 @@ async def main():
             all_text += data + "\n"
 
     print("Extracting configs...")
-    configs = extract_configs(all_text)
-    configs = list(set(configs))
+    configs = list(set(extract_configs(all_text)))
 
     print(f"Total unique configs: {len(configs)}")
 
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_CHECKS)
 
-    print("Checking alive (turbo)...")
+    print("Checking alive (double check mode)...")
     tasks = [check_alive(cfg, semaphore) for cfg in configs]
     results = await asyncio.gather(*tasks)
 
