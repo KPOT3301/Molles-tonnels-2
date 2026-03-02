@@ -1,28 +1,20 @@
 import asyncio
+import aiohttp
 import base64
-import re
 import socket
-import requests
+import time
+import re
 from urllib.parse import urlparse
 
-# =========================
-# CONFIG
-# =========================
-
-SOURCES_FILE = "sslist.txt"
+INPUT_FILE = "sslist.txt"
 OUTPUT_FILE = "Molestunnels.txt"
 BASE64_FILE = "Molestunnels_base64.txt"
 
-FETCH_TIMEOUT = 10
-CHECK_TIMEOUT = 2.5
-MAX_CONCURRENT_CHECKS = 800
-MAX_ALIVE = 500  # Лимит живых VLESS
+MAX_WORKING = 500
+CONCURRENCY = 300
+TIMEOUT = 1.5
 
-# =========================
-# FIXED SUBSCRIPTION HEADER
-# =========================
-
-FIXED_HEADER = [
+HEADERS = [
 "#profile-title:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
 "#subscription-userinfo: upload=0; download=0; total=0; expire=0",
 "#profile-update-interval: 1",
@@ -31,55 +23,39 @@ FIXED_HEADER = [
 "#announce:🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
 ]
 
-# =========================
-# FETCH SOURCES
-# =========================
-
-def fetch_source(url):
-    try:
-        r = requests.get(url.strip(), timeout=FETCH_TIMEOUT)
-        if r.status_code == 200:
-            return r.text.strip()
-    except:
-        return ""
-    return ""
-
-
-def decode_if_base64(text):
-    try:
-        decoded = base64.b64decode(text).decode("utf-8")
-        if "://" in decoded:
-            return decoded
-    except:
-        pass
-    return text
-
 
 def extract_vless(text):
-    pattern = r"(vless://[^\s]+)"
-    return re.findall(pattern, text)
+    return list(set(re.findall(r'vless://[^\s]+', text)))
 
-# =========================
-# PARSE HOST PORT
-# =========================
 
-def parse_host_port(config):
+def country_to_flag(code):
+    if not code or len(code) != 2:
+        return "🌍"
+    return chr(ord(code[0].upper()) + 127397) + chr(ord(code[1].upper()) + 127397)
+
+
+async def fetch_country(session, ip):
     try:
-        parsed = urlparse(config)
-        return parsed.hostname, parsed.port
+        url = f"http://ip-api.com/json/{ip}?fields=countryCode"
+        async with session.get(url, timeout=2) as resp:
+            data = await resp.json()
+            return country_to_flag(data.get("countryCode"))
     except:
-        return None, None
+        return "🌍"
 
-# =========================
-# CHECKING
-# =========================
 
-async def async_check(host, port):
+async def fetch(session, url):
     try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port),
-            timeout=CHECK_TIMEOUT
-        )
+        async with session.get(url, timeout=TIMEOUT) as response:
+            return await response.text()
+    except:
+        return ""
+
+
+async def check_once(host, port):
+    try:
+        future = asyncio.open_connection(host, port)
+        reader, writer = await asyncio.wait_for(future, timeout=TIMEOUT)
         writer.close()
         await writer.wait_closed()
         return True
@@ -87,125 +63,96 @@ async def async_check(host, port):
         return False
 
 
-def fallback_check(host, port):
-    try:
-        with socket.create_connection((host, port), timeout=CHECK_TIMEOUT):
-            return True
-    except:
-        return False
-
-
-async def check_alive(config, semaphore):
-    host, port = parse_host_port(config)
-    if not host or not port:
+async def check_server(config, semaphore, session):
+    if check_server.counter >= MAX_WORKING:
         return None
 
-    async with semaphore:
-        ok = await async_check(host, port)
+    try:
+        parsed = urlparse(config)
+        host = parsed.hostname
+        port = parsed.port
 
-        if not ok:
+        if not host or not port:
+            return None
+
+        async with semaphore:
+            first = await check_once(host, port)
+            if not first:
+                return None
+
             await asyncio.sleep(0.5)
-            ok = await async_check(host, port)
 
-        if not ok:
-            ok = fallback_check(host, port)
+            second = await check_once(host, port)
+            if not second:
+                return None
 
-        if ok:
-            return config
+            ip = host
+            try:
+                ip = socket.gethostbyname(host)
+            except:
+                pass
 
-    return None
+            flag = await fetch_country(session, ip)
 
-# =========================
-# MAIN
-# =========================
+            check_server.counter += 1
+            number = check_server.counter
+
+            print(f"Alive ({number}): {host}:{port} {flag}")
+
+            clean_config = config.split("#")[0]
+            return f"{clean_config}#{flag} {number:03d}"
+
+    except:
+        return None
+
+
+check_server.counter = 0
+
 
 async def main():
-
     print("Reading sources...")
 
     try:
-        with open(SOURCES_FILE, "r", encoding="utf-8") as f:
+        with open(INPUT_FILE, "r", encoding="utf-8") as f:
             sources = [line.strip() for line in f if line.strip()]
     except:
-        print("sslist.txt not found.")
+        print("No sslist.txt found.")
         return
 
-    if not sources:
-        print("No sources found.")
-        return
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch(session, url) for url in sources]
+        results = await asyncio.gather(*tasks)
 
-    print(f"Sources count: {len(sources)}")
-    print("Fetching sources...")
+        print("Extracting VLESS configs...")
+        all_configs = []
 
-    all_text = ""
-    for src in sources:
-        data = fetch_source(src)
-        if data:
-            data = decode_if_base64(data)
-            all_text += data + "\n"
+        for text in results:
+            all_configs.extend(extract_vless(text))
 
-    print("Extracting VLESS configs only...")
-    configs = list(set(extract_vless(all_text)))
-    print(f"Unique VLESS configs: {len(configs)}")
+        all_configs = list(set(all_configs))
+        print(f"Total unique VLESS configs: {len(all_configs)}")
 
-    if not configs:
-        print("No VLESS configs extracted.")
-        return
+        semaphore = asyncio.Semaphore(CONCURRENCY)
 
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT_CHECKS)
+        print("Checking servers...")
 
-    print("Checking alive VLESS (early stop mode)...")
+        tasks = [check_server(cfg, semaphore, session) for cfg in all_configs]
+        checked = await asyncio.gather(*tasks)
 
-    alive = []
-    tasks = set()
+    alive = [c for c in checked if c is not None]
 
-    for cfg in configs:
-        task = asyncio.create_task(check_alive(cfg, semaphore))
-        tasks.add(task)
-
-        done, tasks = await asyncio.wait(
-            tasks,
-            timeout=0,
-            return_when=asyncio.FIRST_COMPLETED
-        )
-
-        for d in done:
-            result = d.result()
-            if result:
-                alive.append(result)
-
-                if len(alive) >= MAX_ALIVE:
-                    print(f"Reached {MAX_ALIVE} alive VLESS. Stopping early.")
-                    for t in tasks:
-                        t.cancel()
-                    tasks.clear()
-                    break
-
-        if len(alive) >= MAX_ALIVE:
-            break
-
-    for t in tasks:
-        try:
-            result = await t
-            if result and len(alive) < MAX_ALIVE:
-                alive.append(result)
-        except:
-            pass
-
-    alive = sorted(set(alive))
-
-    print(f"Final alive VLESS configs: {len(alive)}")
+    print(f"Alive configs: {len(alive)}")
 
     if len(alive) == 0:
-        print("WARNING: No alive VLESS found!")
-        print("Aborting overwrite to protect existing subscription.")
+        print("WARNING: No alive configs found!")
+        print("Abort overwrite to protect subscription.")
         exit(1)
+
+    alive.sort()
 
     print("Writing files...")
 
-    # Добавляем фиксированный header
-    final_content = FIXED_HEADER + alive
-    final_text = "\n".join(final_content)
+    final_text = "\n".join(HEADERS + alive)
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write(final_text)
@@ -215,7 +162,7 @@ async def main():
     with open(BASE64_FILE, "w", encoding="utf-8") as f:
         f.write(base64_data)
 
-    print("Done successfully.")
+    print("Done.")
 
 
 if __name__ == "__main__":
