@@ -3,6 +3,7 @@ import aiohttp
 import base64
 import socket
 import re
+import time
 from urllib.parse import urlparse
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -18,9 +19,13 @@ TIMEOUT = 1.5
 PROFILE_TITLE = "🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
 
 
+# -------------------- EXTRACT VLESS --------------------
+
 def extract_vless(text):
     return list(set(re.findall(r'vless://[^\s]+', text)))
 
+
+# -------------------- COUNTRY FLAG --------------------
 
 def country_to_flag(code):
     if not code or len(code) != 2:
@@ -38,6 +43,8 @@ async def fetch_country(session, ip):
         return "🌍"
 
 
+# -------------------- FETCH SOURCES --------------------
+
 async def fetch(session, url):
     try:
         async with session.get(url, timeout=TIMEOUT) as response:
@@ -46,20 +53,24 @@ async def fetch(session, url):
         return ""
 
 
+# -------------------- TCP CHECK WITH LATENCY --------------------
+
 async def check_once(host, port):
     try:
+        start = time.perf_counter()
         future = asyncio.open_connection(host, port)
         reader, writer = await asyncio.wait_for(future, timeout=TIMEOUT)
+        latency = (time.perf_counter() - start) * 1000
         writer.close()
         await writer.wait_closed()
-        return True
+        return latency
     except:
-        return False
+        return None
 
+
+# -------------------- SERVER CHECK --------------------
 
 async def check_server(config, semaphore, session, update_date):
-    if check_server.counter >= MAX_WORKING:
-        return None
 
     try:
         parsed = urlparse(config)
@@ -70,15 +81,18 @@ async def check_server(config, semaphore, session, update_date):
             return None
 
         async with semaphore:
+
             first = await check_once(host, port)
-            if not first:
+            if first is None:
                 return None
 
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
 
             second = await check_once(host, port)
-            if not second:
+            if second is None:
                 return None
+
+            avg_latency = (first + second) / 2
 
             ip = host
             try:
@@ -88,21 +102,19 @@ async def check_server(config, semaphore, session, update_date):
 
             flag = await fetch_country(session, ip)
 
-            check_server.counter += 1
-            number = check_server.counter
-
-            print(f"Alive ({number}): {host}:{port} {flag}")
-
             clean_config = config.split("#")[0]
 
-            return f"{clean_config}#{flag} СЕРВЕР {number:03d} | ОБНОВЛЕН {update_date}"
+            return {
+                "config": clean_config,
+                "latency": avg_latency,
+                "flag": flag
+            }
 
     except:
         return None
 
 
-check_server.counter = 0
-
+# -------------------- MAIN --------------------
 
 async def main():
     print("Reading sources...")
@@ -114,54 +126,70 @@ async def main():
         print("No sslist.txt found.")
         return
 
-    # Московская дата
     moscow_time = datetime.now(ZoneInfo("Europe/Moscow"))
     update_date = moscow_time.strftime("%Y-%m-%d")
 
     async with aiohttp.ClientSession() as session:
+
         tasks = [fetch(session, url) for url in sources]
         results = await asyncio.gather(*tasks)
 
         print("Extracting VLESS configs...")
-        all_configs = []
 
+        all_configs = []
         for text in results:
             all_configs.extend(extract_vless(text))
 
         all_configs = list(set(all_configs))
+
         print(f"Total unique VLESS configs: {len(all_configs)}")
 
         semaphore = asyncio.Semaphore(CONCURRENCY)
 
-        print("Checking servers...")
+        print("Checking servers (with latency)...")
 
-        tasks = [check_server(cfg, semaphore, session, update_date) for cfg in all_configs]
+        tasks = [
+            check_server(cfg, semaphore, session, update_date)
+            for cfg in all_configs
+        ]
+
         checked = await asyncio.gather(*tasks)
 
     alive = [c for c in checked if c is not None]
 
-    print(f"Alive configs: {len(alive)}")
-
-    if len(alive) == 0:
+    if not alive:
         print("WARNING: No alive configs found!")
-        print("Abort overwrite to protect subscription.")
-        exit(1)
+        return
 
-    alive.sort()
+    # 🔥 СОРТИРОВКА ПО СКОРОСТИ
+    alive.sort(key=lambda x: x["latency"])
 
-    # ===== АВТОМАТИЧЕСКИЙ КРАСИВЫЙ АНОНС =====
+    # 💎 Берём самые быстрые 500
+    alive = alive[:MAX_WORKING]
+
+    print(f"Selected fastest: {len(alive)}")
+
+    formatted = []
+
+    for idx, item in enumerate(alive, start=1):
+        formatted.append(
+            f'{item["config"]}#{item["flag"]} СЕРВЕР {idx:03d} | {int(item["latency"])}ms | ОБНОВЛЕН {update_date}'
+        )
+
+    # -------------------- HEADERS --------------------
+
     HEADERS = [
         f"#profile-title:{PROFILE_TITLE}",
         "#subscription-userinfo: upload=0; download=0; total=0; expire=0",
         "#profile-update-interval: 1",
         f"#support-url:{PROFILE_TITLE}",
         f"#profile-web-page-url:{PROFILE_TITLE}",
-        f"#announce: 🚀 АКТИВНО: {len(alive)} | 📅 {update_date}"
+        f"#announce: 🚀 ТОП {len(formatted)} САМЫХ БЫСТРЫХ | 📅 {update_date}"
     ]
 
     print("Writing files...")
 
-    final_text = "\n".join(HEADERS + alive)
+    final_text = "\n".join(HEADERS + formatted)
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         f.write(final_text)
