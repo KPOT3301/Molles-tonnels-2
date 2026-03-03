@@ -11,36 +11,50 @@ import datetime
 # --- НАСТРОЙКИ ---
 INPUT_FILE = 'links.txt'
 OUTPUT_FILE = 'subscription.txt'
-# Прямая ссылка на бинарный файл для Linux amd64 (архитектура GitHub Actions)
-CHECKER_URL = "https://github.com/nndrizhu/nodes-checker/releases/latest/download/nodes-checker-linux-amd64"
 CHECKER_PATH = "./nodes-checker"
 BATCH_SIZE = 100 
+REPO_API_URL = "https://api.github.com/repos/nndrizhu/nodes-checker/releases/latest"
+
+def get_latest_checker_url():
+    """Автоматически находит актуальную ссылку на amd64 бинарник"""
+    try:
+        print("🔍 Поиск актуальной версии чекера...")
+        response = requests.get(REPO_API_URL, timeout=15)
+        response.raise_for_status()
+        assets = response.json().get('assets', [])
+        for asset in assets:
+            # Ищем файл, в названии которого есть 'linux' и 'amd64'
+            name = asset.get('name', '').lower()
+            if 'linux' in name and 'amd64' in name:
+                return asset.get('browser_download_url')
+        raise Exception("Не удалось найти подходящий файл в релизах репозитория.")
+    except Exception as e:
+        print(f"❌ Ошибка при поиске чекера: {e}")
+        return None
 
 def download_checker():
-    """Скачивает чекер и проверяет его работоспособность"""
+    """Скачивает чекер, используя динамическую ссылку"""
     if os.path.exists(CHECKER_PATH):
-        os.remove(CHECKER_PATH) # Удаляем старый, чтобы избежать ошибок формата
+        os.remove(CHECKER_PATH)
         
-    print(f"📥 Загрузка чекера: {CHECKER_URL}")
+    url = get_latest_checker_url()
+    if not url:
+        print("❌ Ссылка на чекер не найдена. Остановка.")
+        exit(1)
+        
+    print(f"📥 Загрузка чекера из: {url}")
     try:
-        r = requests.get(CHECKER_URL, stream=True, timeout=30)
+        r = requests.get(url, stream=True, timeout=30)
         r.raise_for_status()
         with open(CHECKER_PATH, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
         
-        # Установка прав на запуск
         st = os.stat(CHECKER_PATH)
         os.chmod(CHECKER_PATH, st.st_mode | stat.S_IEXEC)
-        
-        # Проверка размера (бинарник должен быть ~5-15 МБ)
-        file_size = os.path.getsize(CHECKER_PATH)
-        if file_size < 1000000:
-            raise Exception(f"Файл слишком мал ({file_size} байт). Вероятно, скачана ошибка 404.")
-        
-        print(f"✅ Чекер загружен успешно ({file_size // 1024} KB)")
+        print(f"✅ Чекер успешно подготовлен ({os.path.getsize(CHECKER_PATH) // 1024} KB)")
     except Exception as e:
-        print(f"❌ Ошибка при подготовке чекера: {e}")
+        print(f"❌ Ошибка загрузки: {e}")
         exit(1)
 
 def parse_host(link):
@@ -75,8 +89,6 @@ def rename_server(link, info, index):
     isp = info.get('isp', 'Unknown').split()[0].strip(',.')
     num = str(index).zfill(4)
     date = datetime.datetime.now().strftime("%d-%m-%Y")
-    
-    # Новый формат названия
     new_ps = f"[{flag}] {isp} | №{num} | {date}"
     
     if link.startswith('vless://'):
@@ -91,8 +103,6 @@ def rename_server(link, info, index):
 
 def main():
     download_checker()
-    
-    # 1. Сбор ссылок (полная перезапись)
     raw_links_dict = {}
     if os.path.exists(INPUT_FILE):
         with open(INPUT_FILE, 'r') as f:
@@ -108,7 +118,6 @@ def main():
                 for line in data.splitlines():
                     clean = line.strip()
                     if clean.startswith(('vless://', 'vmess://')):
-                        # Дедупликация по телу ссылки
                         raw_links_dict[clean.split('#')[0]] = clean
             except: continue
 
@@ -116,12 +125,10 @@ def main():
         print("🛑 Ссылок не найдено.")
         return
 
-    # 2. Проверка YouTube через nodes-checker
-    print(f"🚀 Проверка {len(raw_links_dict)} серверов на YouTube...")
+    print(f"🚀 Проверка {len(raw_links_dict)} серверов...")
     with open("temp.txt", "w") as f: 
         f.write("\n".join(raw_links_dict.values()))
     
-    # Запускаем чекер
     res = subprocess.run(
         [CHECKER_PATH, "-u", "https://www.youtube.com", "-f", "temp.txt", "--format", "json"],
         capture_output=True, text=True
@@ -129,38 +136,31 @@ def main():
     
     try:
         nodes = json.loads(res.stdout)
-        # Оставляем живые и сортируем по пингу
         alive = sorted([n for n in nodes if n.get('delay', 0) > 0], key=lambda x: x['delay'])
     except Exception as e:
-        print(f"❌ Ошибка обработки результатов чекера: {e}")
+        print(f"❌ Ошибка чекера: {e}")
         return
 
-    # 3. Фильтрация по IP и переименование
-    print(f"🌍 Анализ Geo-IP для {len(alive)} серверов...")
+    print(f"🌍 Анализ IP для {len(alive)} серверов...")
     final_list = []
     idx = 1
-    
     for i in range(0, len(alive), BATCH_SIZE):
         chunk = alive[i:i+BATCH_SIZE]
         hosts = [parse_host(n['link']) for n in chunk if parse_host(n['link'])]
         i_map = get_batch_ip_info(hosts)
-        
         for n in chunk:
             h = parse_host(n['link'])
             info = i_map.get(h)
-            # Убираем Cloudflare и пустые результаты
             if info and "Cloudflare" not in info.get('isp', ''):
                 final_list.append(rename_server(n['link'], info, idx))
                 idx += 1
-        
-        time.sleep(2) # Пауза для API
+        time.sleep(2)
 
-    # 4. Сохранение результата (Base64)
     if final_list:
         content = "\n".join(final_list)
         with open(OUTPUT_FILE, "w") as f:
             f.write(base64.b64encode(content.encode('utf-8')).decode('utf-8'))
-        print(f"✨ Готово! Сохранено серверов: {len(final_list)}")
+        print(f"✨ Готово! Сохранено: {len(final_list)}")
     else:
         print("🛑 Рабочих серверов не осталось.")
 
