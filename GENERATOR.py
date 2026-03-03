@@ -26,7 +26,7 @@ STATIC_LINES = [
 ]
 
 
-# ================= DOWNLOAD =================
+# ================= ЗАГРУЗКА + АНТИДУБЛИКАТ =================
 def download_subscriptions():
     if not os.path.exists("sslist.txt"):
         return []
@@ -34,7 +34,7 @@ def download_subscriptions():
     with open("sslist.txt", "r", encoding="utf-8") as f:
         urls = [l.strip() for l in f if l.startswith("http")]
 
-    all_links = []
+    raw_links = []
 
     for url in urls:
         try:
@@ -49,15 +49,34 @@ def download_subscriptions():
 
             for line in content.splitlines():
                 if line.startswith("vless://"):
-                    all_links.append(line.strip())
+                    raw_links.append(line.strip())
 
         except:
             continue
 
-    return list(set(all_links))
+    # ===== АНТИДУБЛИКАТ =====
+    unique_links = []
+    seen = set()
+
+    for link in raw_links:
+        try:
+            parsed = urlparse(link)
+            key = f"{parsed.hostname}:{parsed.port}:{parsed.username}"
+
+            if key not in seen:
+                seen.add(key)
+                unique_links.append(link)
+
+        except:
+            continue
+
+    print(f"Всего получено: {len(raw_links)}")
+    print(f"После антидубликата: {len(unique_links)}")
+
+    return unique_links
 
 
-# ================= VLESS PARSER =================
+# ================= ПАРСИНГ =================
 def parse_vless(link):
     parsed = urlparse(link)
     params = parse_qs(parsed.query)
@@ -72,9 +91,6 @@ def parse_vless(link):
         "network": get("type", "tcp"),
         "security": get("security", "none"),
         "sni": get("sni"),
-        "path": get("path", ""),
-        "host_header": get("host"),
-        "serviceName": get("serviceName"),
         "flow": get("flow"),
         "pbk": get("pbk"),
         "sid": get("sid"),
@@ -121,7 +137,7 @@ def build_config(data):
     }
 
 
-# ================= XRAY CHECK =================
+# ================= XRAY ПРОВЕРКА =================
 def xray_check(link):
     try:
         data = parse_vless(link)
@@ -155,10 +171,14 @@ async def bounded_check(sem, link):
         return await loop.run_in_executor(None, xray_check, link)
 
 
-# ================= MAIN =================
+# ================= ОСНОВНАЯ ЛОГИКА =================
 async def main():
     links = download_subscriptions()
-    print("Найдено:", len(links))
+    print("На проверку:", len(links))
+
+    if not links:
+        write_files([])
+        return
 
     sem = asyncio.Semaphore(MAX_WORKERS)
     tasks = [bounded_check(sem, link) for link in links]
@@ -170,13 +190,14 @@ async def main():
     write_files(alive_links)
 
 
-# ================= WRITE FILE =================
+# ================= ПЕРЕИМЕНОВАНИЕ =================
 def rename_link(link, index, date_str):
     parsed = urlparse(link)
     new_name = f"СЕРВЕР {index:04d}| ОБНОВЛЕН {date_str}"
     return urlunparse(parsed._replace(fragment=new_name))
 
 
+# ================= СОХРАНЕНИЕ =================
 def write_files(alive_links):
     moscow = datetime.now(ZoneInfo("Europe/Moscow"))
     date_str = moscow.strftime("%d-%m-%Y")
