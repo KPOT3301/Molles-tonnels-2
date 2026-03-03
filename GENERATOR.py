@@ -9,25 +9,7 @@ from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 from zoneinfo import ZoneInfo
 
-import requests
-
-TIMEOUT = 6
 XRAY_PATH = "./xray"
-TEST_URL = "https://www.google.com"
-
-
-# ================= TCP CHECK =================
-async def tcp_check(host, port):
-    try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, int(port)),
-            timeout=TIMEOUT
-        )
-        writer.close()
-        await writer.wait_closed()
-        return True
-    except:
-        return False
 
 
 # ================= VLESS PARSER =================
@@ -114,7 +96,7 @@ def build_config(data):
     }
 
 
-# ================= XRAY CHECK =================
+# ================= XRAY ANTI-BLOCK CHECK =================
 def xray_check(link):
     try:
         data = parse_vless(link)
@@ -130,41 +112,25 @@ def xray_check(link):
             stderr=subprocess.DEVNULL
         )
 
-        time.sleep(2)
+        # ждём 3 секунды
+        time.sleep(3)
 
-        proxies = {
-            "http": "socks5h://127.0.0.1:10808",
-            "https": "socks5h://127.0.0.1:10808"
-        }
-
-        try:
-            r = requests.get(TEST_URL, proxies=proxies, timeout=8)
-            ok = r.status_code == 200
-        except:
-            ok = False
+        # если процесс не завершился — считаем рабочим
+        alive = proc.poll() is None
 
         proc.kill()
         os.remove(config_path)
 
-        return ok
+        return alive
 
     except:
         return False
 
 
-# ================= FULL CHECK =================
+# ================= ASYNC =================
 async def check_vless(link):
-    try:
-        data = parse_vless(link)
-
-        tcp_ok = await tcp_check(data["host"], data["port"])
-        if not tcp_ok:
-            return False
-
-        return xray_check(link)
-
-    except:
-        return False
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, xray_check, link)
 
 
 async def process_links(links):
@@ -203,13 +169,13 @@ def write_files(alive):
 async def main():
     if not os.path.exists("sslist.txt"):
         print("sslist.txt not found")
+        write_files([])
         return
 
     with open("sslist.txt", "r", encoding="utf-8") as f:
         links = [l.strip() for l in f if l.startswith("vless://")]
 
     if not links:
-        print("No VLESS links found")
         write_files([])
         return
 
