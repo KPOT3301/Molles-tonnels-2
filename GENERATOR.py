@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GENERATOR.py – Оптимизированная проверка Vless серверов (двухэтапная, порт 8080)
+# GENERATOR.py – Оптимизированная проверка Vless серверов с фильтром по latency (≤500 мс)
 
 import re
 import socket
@@ -15,8 +15,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 import requests
 
-# Настройка логирования – пока оставим DEBUG для диагностики
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+# Настройка логирования – можно оставить INFO, если не нужна отладка
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Константы
 SOURCES_FILE = "sources.txt"
@@ -29,11 +29,11 @@ XRAY_CORE_PATH = "xray"
 TCP_CHECK_TIMEOUT = 2
 TCP_MAX_WORKERS = 300
 
-# Реальная проверка – порт изменён на 8080
+# Реальная проверка
 SOCKS_PORT = 8080
 REAL_CHECK_TIMEOUT = 15
 REAL_CHECK_CONCURRENCY = 9
-XRAY_STARTUP_DELAY = 3          # увеличено для надёжности
+XRAY_STARTUP_DELAY = 3
 RETRY_COUNT = 1
 
 # Список тестовых URL (возвращают 204)
@@ -44,6 +44,9 @@ TEST_URLS = [
     "http://www.gstatic.com/generate_204",
     "http://www.google.com/generate_204"
 ]
+
+# Порог задержки (мс) – серверы с задержкой выше этого значения будут отбрасываться. 0 = отключено.
+MAX_LATENCY_MS = 500  # 0.5 секунды
 
 # Режим работы: True – только TCP (быстро), False – полная проверка
 ONLY_TCP = False
@@ -127,11 +130,9 @@ def parse_vless_link(link):
 
         params = parse_qs(parsed.query)
         security = params.get('security', ['none'])[0]
-        # Нормализация опечатки tsl -> tls
         if security == 'tsl':
             security = 'tls'
             logging.debug(f"Нормализовано security: tsl -> tls для {link[:60]}")
-        # Для reality тоже может быть опечатка, но оставим как есть
 
         config = {
             'uuid': uuid,
@@ -156,12 +157,11 @@ def parse_vless_link(link):
         return None
 
 def create_xray_config(vless_config):
-    """Генерирует JSON конфигурацию для Xray-core с портом 8080."""
     config = {
         "log": {"loglevel": "error"},
         "inbounds": [
             {
-                "port": SOCKS_PORT,          # изменено на 8080
+                "port": SOCKS_PORT,
                 "listen": "127.0.0.1",
                 "protocol": "socks",
                 "settings": {
@@ -261,7 +261,7 @@ def check_vless_real(link):
 
         time.sleep(XRAY_STARTUP_DELAY)
 
-        # Проверка, что порт 8080 открыт
+        # Проверка, что порт открыт
         sock_check = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         if sock_check.connect_ex(('127.0.0.1', SOCKS_PORT)) != 0:
             logging.debug(f"Порт {SOCKS_PORT} не открыт после запуска Xray")
@@ -272,7 +272,6 @@ def check_vless_real(link):
             'https': f'socks5h://127.0.0.1:{SOCKS_PORT}'
         }
 
-        # Перебираем тестовые URL
         for test_url in TEST_URLS:
             for attempt in range(RETRY_COUNT + 1):
                 try:
@@ -294,13 +293,10 @@ def check_vless_real(link):
                     logging.debug(f"Попытка {attempt+1} для {test_url} не удалась: {e}")
                     time.sleep(1)
 
-        # Если все попытки провалились, читаем stderr Xray
         if process:
-            stdout, stderr = process.communicate(timeout=2)
+            stdout, stderr = process.communicate(timeout=5)
             if stderr:
                 logging.info(f"Xray stderr для {link[:60]}: {stderr[:1000]}")
-            else:
-                logging.debug("Xray stderr пуст")
         return (link, False, None)
 
     except Exception as e:
@@ -345,15 +341,23 @@ def filter_working_links(links):
     # Этап 2: реальная проверка только для прошедших TCP
     logging.info(f"🧪 Этап 2: Реальная проверка {len(tcp_ok)} ссылок через Xray-core (порт {SOCKS_PORT}, параллельность {REAL_CHECK_CONCURRENCY})...")
     working_real = []
+    too_slow = 0
     with ThreadPoolExecutor(max_workers=REAL_CHECK_CONCURRENCY) as executor:
         future_to_link = {executor.submit(check_vless_real, link): link for link in tcp_ok}
         for i, future in enumerate(as_completed(future_to_link), 1):
             link, is_working, latency = future.result()
             if is_working:
-                working_real.append(link)
-                logging.info(f"✅ [{i}/{len(tcp_ok)}] Работает (latency: {latency}ms): {link[:80]}...")
+                if MAX_LATENCY_MS > 0 and latency > MAX_LATENCY_MS:
+                    too_slow += 1
+                    logging.info(f"⚠️ [{i}/{len(tcp_ok)}] Слишком медленный (latency: {latency}ms > {MAX_LATENCY_MS}ms): {link[:80]}...")
+                else:
+                    working_real.append(link)
+                    logging.info(f"✅ [{i}/{len(tcp_ok)}] Работает (latency: {latency}ms): {link[:80]}...")
             else:
                 logging.info(f"❌ [{i}/{len(tcp_ok)}] Не работает: {link[:80]}...")
+
+    if MAX_LATENCY_MS > 0 and too_slow > 0:
+        logging.info(f"⚠️ Отсеяно по скорости: {too_slow} серверов с latency > {MAX_LATENCY_MS}ms")
 
     return working_real
 
