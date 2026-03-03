@@ -1,191 +1,195 @@
 import asyncio
 import aiohttp
+import base64
 import json
+from datetime import datetime
 import os
 import time
-from datetime import datetime
 
-SERVERS_FILE = "servers.txt"
-CACHE_FILE = "best_cache.json"
-OUTPUT_FILE = "TOP100.txt"
+SS_LIST_FILE = "sslist.txt"
 
-MAX_SERVERS = 100
-CACHE_MAX_AGE = 3 * 24 * 60 * 60
-DECAY_FACTOR = 0.7
+OUTPUT_TEXT = "Molestunnels.txt"
+OUTPUT_BASE64 = "Molestunnels_base64.txt"
 
-TIMEOUT = 12
-CONCURRENCY = 50
+TIMEOUT = 6
+CONCURRENCY = 20
+MIN_SCORE = 60
 
-STAGE2_LIMIT = 1_000_000
-STAGE3_LIMIT = 3_000_000
-
-MIN_LATENCY = 4
-MIN_SPEED = 1
-
-
-def load_servers():
-    if not os.path.exists(SERVERS_FILE):
-        return []
-    with open(SERVERS_FILE, "r", encoding="utf-8") as f:
-        return list(set(x.strip() for x in f if x.strip()))
+STATIC_LINES = [
+"#profile-title:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
+"#subscription-userinfo: upload=0; download=0; total=0; expire=0",
+"#profile-update-interval: 1",
+"#support-url:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
+"#profile-web-page-url:🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
+]
 
 
-def load_cache():
-    if not os.path.exists(CACHE_FILE):
-        return {}
+# ================= ЗАГРУЗКА =================
 
+async def fetch_text(session, url):
     try:
-        with open(CACHE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        now = time.time()
-        valid = {}
-
-        for item in data.get("servers", []):
-            if now - item.get("last_checked", 0) <= CACHE_MAX_AGE:
-                valid[item["url"]] = item
-
-        return valid
-    except:
-        return {}
-
-
-def save_cache(cache):
-    with open(CACHE_FILE, "w", encoding="utf-8") as f:
-        json.dump({"servers": list(cache.values())}, f, indent=2)
-
-
-async def stage1(session, url):
-    try:
-        headers = {"Range": "bytes=0-10"}
-        start = time.time()
-        async with session.get(url, headers=headers, timeout=TIMEOUT) as r:
-            if r.status not in (200, 206):
-                return None
-        return time.time() - start
+        async with session.get(url, timeout=TIMEOUT) as resp:
+            return await resp.text()
     except:
         return None
 
 
-async def speed_test(session, url, limit):
+def decode_if_base64(text):
     try:
-        downloaded = 0
-        start = time.time()
+        padded = text.strip() + "=" * (-len(text.strip()) % 4)
+        decoded = base64.b64decode(padded).decode()
+        if "vless://" in decoded or "vmess://" in decoded:
+            return decoded
+        return text
+    except:
+        return text
 
-        async with session.get(url, timeout=TIMEOUT) as r:
-            if r.status not in (200, 206):
-                return None
 
-            async for chunk in r.content.iter_chunked(8192):
-                downloaded += len(chunk)
-                if downloaded >= limit:
-                    break
+def extract_keys(text):
+    lines = text.splitlines()
+    keys = []
+    for line in lines:
+        line = line.strip()
+        if line.startswith("vless://") or line.startswith("vmess://"):
+            keys.append(line)
+    return keys
 
-        duration = time.time() - start
-        if duration <= 0:
-            return None
 
-        speed = (downloaded * 8) / duration / 1_000_000
-        return speed
+# ================= ИЗВЛЕЧЕНИЕ HOST/PORT =================
+
+def extract_host_port(key):
+    try:
+        if key.startswith("vless://"):
+            part = key.split("@")[1]
+            host_port = part.split("?")[0]
+            host, port = host_port.split(":")
+            return host, int(port)
+
+        if key.startswith("vmess://"):
+            raw = key.replace("vmess://", "")
+            padded = raw + "=" * (-len(raw) % 4)
+            data = json.loads(base64.b64decode(padded).decode())
+            return data.get("add"), int(data.get("port"))
+    except:
+        return None, None
+
+
+# ================= ПРОВЕРКА =================
+
+async def check_tcp(host, port):
+    try:
+        start = time.perf_counter()
+        reader, writer = await asyncio.open_connection(host, port)
+        latency = time.perf_counter() - start
+        writer.close()
+        await writer.wait_closed()
+        return latency
     except:
         return None
 
 
-async def test_pipeline(session, url):
-    latency = await stage1(session, url)
-    if latency is None or latency > MIN_LATENCY:
+def calculate_score(latency):
+    if latency is None:
+        return 0
+
+    score = 50  # TCP открыт
+
+    if latency < 0.4:
+        score += 40
+    elif latency < 0.8:
+        score += 30
+    elif latency < 1.2:
+        score += 20
+    elif latency < 1.8:
+        score += 10
+
+    return score
+
+
+async def validate(key, semaphore):
+    host, port = extract_host_port(key)
+    if not host or not port:
         return None
 
-    speed_small = await speed_test(session, url, STAGE2_LIMIT)
-    if speed_small is None or speed_small < MIN_SPEED:
+    async with semaphore:
+        latency = await check_tcp(host, port)
+
+    score = calculate_score(latency)
+
+    if score < MIN_SCORE:
         return None
 
-    speed_large = await speed_test(session, url, STAGE3_LIMIT)
-    if speed_large is None:
-        return None
+    return (score, latency, key)
 
-    final_speed = (speed_small + speed_large) / 2
-    score = final_speed * 0.8 + (1 / latency) * 0.2
 
-    return {
-        "url": url,
-        "latency": round(latency, 3),
-        "speed": round(final_speed, 2),
-        "score": round(score, 3)
-    }
-
+# ================= MAIN =================
 
 async def main():
-    servers = load_servers()
-    cache = load_cache()
-    now = time.time()
 
-    if not servers:
-        print("No servers found.")
+    if not os.path.exists(SS_LIST_FILE):
+        print("sslist.txt не найден.")
         return
 
-    connector = aiohttp.TCPConnector(limit=CONCURRENCY, ssl=False)
+    with open(SS_LIST_FILE, "r", encoding="utf-8") as f:
+        urls = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+
+    connector = aiohttp.TCPConnector(ssl=False)
     timeout = aiohttp.ClientTimeout(total=TIMEOUT)
 
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-        tasks = [test_pipeline(session, url) for url in servers]
-        results = await asyncio.gather(*tasks)
 
-    results = [r for r in results if r]
-    tested_urls = {r["url"] for r in results}
+        texts = await asyncio.gather(*[fetch_text(session, url) for url in urls])
 
-    first_run = len(cache) == 0
-    MIN_SUCCESS_RUNS = 1 if first_run else 2
+    all_keys = []
+    for text in texts:
+        if not text:
+            continue
+        text = decode_if_base64(text)
+        all_keys.extend(extract_keys(text))
 
-    for r in results:
-        url = r["url"]
-        score = r["score"]
+    all_keys = list(dict.fromkeys(all_keys))
 
-        if url in cache:
-            old = cache[url]
-            new_score = old["score"] * DECAY_FACTOR + score * (1 - DECAY_FACTOR)
+    semaphore = asyncio.Semaphore(CONCURRENCY)
 
-            cache[url]["score"] = round(new_score, 3)
-            cache[url]["success_runs"] += 1
-            cache[url]["fail_runs"] = 0
-            cache[url]["last_checked"] = now
-            cache[url]["latency"] = r["latency"]
-        else:
-            cache[url] = {
-                "url": url,
-                "score": score,
-                "success_runs": 1,
-                "fail_runs": 0,
-                "last_checked": now,
-                "latency": r["latency"]
-            }
+    tasks = [validate(k, semaphore) for k in all_keys]
+    results = await asyncio.gather(*tasks)
 
-    for url in list(cache.keys()):
-        if url not in tested_urls:
-            cache[url]["fail_runs"] += 1
-            cache[url]["score"] *= 0.85
+    valid = [r for r in results if r]
 
-            if cache[url]["fail_runs"] >= 3:
-                del cache[url]
+    # сортировка по score, потом по latency
+    valid.sort(key=lambda x: (-x[0], x[1]))
 
-    stable = [
-        v for v in cache.values()
-        if v["success_runs"] >= MIN_SUCCESS_RUNS
-    ]
+    today = datetime.now().strftime("%d-%m-%Y")
 
-    stable.sort(key=lambda x: x["score"], reverse=True)
-    top = stable[:MAX_SERVERS]
+    renamed = []
 
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        for i, s in enumerate(top, 1):
-            name = f"SERVER {str(i).zfill(4)} | {datetime.utcnow().strftime('%d-%m-%Y')}"
-            f.write(f"{name}\n{s['url']}\nScore: {s['score']} | Speed: {s['speed']} Mbps | Latency: {s['latency']}s\n\n")
+    for i, (score, latency, key) in enumerate(valid, 1):
 
-    save_cache(cache)
+        name = f"СЕРВЕР {i:04d} | {latency:.2f}s | ОБНОВЛЕН {today}"
 
-    print(f"Total tested: {len(servers)}")
-    print(f"Passed pipeline: {len(results)}")
-    print(f"Stable servers: {len(top)}")
+        if "#" in key:
+            key = key.split("#")[0]
+
+        renamed.append(key + "#" + name)
+
+    announce = f"#announce: АКТИВНЫХ {len(renamed)} | ОБНОВЛЕНО {today}"
+
+    final_lines = []
+    final_lines.extend(STATIC_LINES)
+    final_lines.append(announce)
+    final_lines.extend(renamed)
+
+    final_text = "\n".join(final_lines)
+
+    with open(OUTPUT_TEXT, "w", encoding="utf-8") as f:
+        f.write(final_text)
+
+    encoded = base64.b64encode(final_text.encode()).decode()
+
+    with open(OUTPUT_BASE64, "w", encoding="utf-8") as f:
+        f.write(encoded)
+
+    print(f"Готово. Валидных серверов: {len(renamed)}")
 
 
 if __name__ == "__main__":
