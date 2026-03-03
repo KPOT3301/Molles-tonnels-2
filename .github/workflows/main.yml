@@ -2,11 +2,11 @@ name: Speed Filter Update
 
 on:
   schedule:
-    - cron: '0 */6 * * *' # Запуск каждые 6 часов
-  workflow_dispatch:      # Возможность запустить вручную кнопкой
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
 
 permissions:
-  contents: write         # Даем права на запись в репозиторий
+  contents: write
 
 jobs:
   update-nodes:
@@ -15,8 +15,6 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # Подгружаем всю историю для корректного пуша
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -28,31 +26,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests
 
-      - name: Run Speedtest Script
-        run: python main.py
-
-      - name: Check for Changes
-        id: git-check
+      - name: Run Generator Script
         run: |
-          git status
-          # Проверяем, изменились ли наши выходные файлы
-          if [[ -n "$(git status --porcelain subscription.txt links_plain.txt)" ]]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
+          # Проверяем, существует ли файл, чтобы не гадать по ошибкам
+          if [ -f "GENERATOR.py" ]; then
+            python GENERATOR.py
           else
-            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "❌ Ошибка: Файл GENERATOR.py не найден в корне репозитория!"
+            ls -R
+            exit 1
           fi
 
       - name: Commit and Push Changes
-        if: steps.git-check.outputs.changed == 'true'
         run: |
           git config --local user.name "github-actions[bot]"
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Добавляем конкретные файлы
           git add subscription.txt links_plain.txt
-          
-          # Создаем коммит с текущей датой
-          git commit -m "Auto-update nodes: $(date +'%d-%m-%Y %H:%M') [Speed > 5Mbps]"
-          
-          # Пушим изменения
-          git push origin main
+          # Коммитим только если файлы изменились
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update nodes: $(date +'%d-%m-%Y %H:%M')" && git push origin main)
