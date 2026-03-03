@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 import os
 import time
+import math
 
 SS_LIST_FILE = "sslist.txt"
 
@@ -13,7 +14,7 @@ OUTPUT_BASE64 = "Molestunnels_base64.txt"
 
 TIMEOUT = 8
 CONCURRENCY = 50
-MAX_PING = 1.5  # максимальная задержка (в секундах)
+CUT_PERCENT = 50  # УДАЛЯЕМ 50% САМЫХ МЕДЛЕННЫХ
 
 STATIC_LINES = [
     "#profile-title:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
@@ -23,8 +24,6 @@ STATIC_LINES = [
     "#profile-web-page-url:🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
 ]
 
-
-# ================= ЗАГРУЗКА =================
 
 async def fetch_text(session, url):
     try:
@@ -55,8 +54,6 @@ def extract_keys(text):
     return keys
 
 
-# ================= ИЗВЛЕЧЕНИЕ HOST + PORT =================
-
 def extract_host_port(key):
     try:
         if key.startswith("vless://"):
@@ -69,29 +66,21 @@ def extract_host_port(key):
             raw = key.replace("vmess://", "")
             padded = raw + "=" * (-len(raw) % 4)
             data = json.loads(base64.b64decode(padded).decode())
-            host = data.get("add")
-            port = data.get("port")
-            return host, int(port)
+            return data.get("add"), int(data.get("port"))
     except:
         return None, None
 
     return None, None
 
 
-# ================= TCP ПРОВЕРКА + ПИНГ =================
-
 async def check_port_with_ping(host, port):
     try:
         start = time.perf_counter()
-
         conn = asyncio.open_connection(host, port)
         reader, writer = await asyncio.wait_for(conn, timeout=TIMEOUT)
-
         ping = time.perf_counter() - start
-
         writer.close()
         await writer.wait_closed()
-
         return True, ping
     except:
         return False, None
@@ -99,28 +88,15 @@ async def check_port_with_ping(host, port):
 
 async def validate(key):
     host, port = extract_host_port(key)
-
     if not host or not port:
         return None
 
-    # первая проверка
     ok, ping = await check_port_with_ping(host, port)
     if not ok:
         return None
 
-    # удаляем слишком медленные
-    if ping > MAX_PING:
-        return None
+    return (key, ping)
 
-    # вторая проверка (твоя логика сохранена)
-    ok2, ping2 = await check_port_with_ping(host, port)
-    if not ok2 or ping2 > MAX_PING:
-        return None
-
-    return key
-
-
-# ================= MAIN =================
 
 async def main():
 
@@ -139,14 +115,12 @@ async def main():
         texts = await asyncio.gather(*[fetch_text(session, url) for url in urls])
 
         all_keys = []
-
         for text in texts:
             if not text:
                 continue
             text = decode_if_base64(text)
             all_keys.extend(extract_keys(text))
 
-        # антидубликат
         all_keys = list(dict.fromkeys(all_keys))
 
         semaphore = asyncio.Semaphore(CONCURRENCY)
@@ -159,10 +133,22 @@ async def main():
 
     valid = [r for r in results if r]
 
+    if not valid:
+        print("Нет рабочих серверов.")
+        return
+
+    # сортировка от быстрых к медленным
+    valid.sort(key=lambda x: x[1])
+
+    # удаляем 50% самых медленных
+    cut_count = math.floor(len(valid) * CUT_PERCENT / 100)
+    if cut_count > 0:
+        valid = valid[:-cut_count]
+
     today = datetime.now().strftime("%d-%m-%Y")
 
     renamed = []
-    for i, key in enumerate(valid, 1):
+    for i, (key, ping) in enumerate(valid, 1):
         name = f"СЕРВЕР {i:04d} | ОБНОВЛЕН {today}"
         if "#" in key:
             key = key.split("#")[0]
@@ -177,11 +163,9 @@ async def main():
 
     final_text = "\n".join(final_lines)
 
-    # ======= СОХРАНЯЕМ ОБЫЧНЫЙ ФАЙЛ =======
     with open(OUTPUT_TEXT, "w", encoding="utf-8") as f:
         f.write(final_text)
 
-    # ======= СОХРАНЯЕМ BASE64 =======
     encoded = base64.b64encode(final_text.encode()).decode()
 
     with open(OUTPUT_BASE64, "w", encoding="utf-8") as f:
