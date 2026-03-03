@@ -9,7 +9,42 @@ from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 from zoneinfo import ZoneInfo
 
+import requests
+
 XRAY_PATH = "./xray"
+
+
+# ================= DOWNLOAD SUBSCRIPTIONS =================
+def download_subscriptions():
+    if not os.path.exists("sslist.txt"):
+        return []
+
+    with open("sslist.txt", "r", encoding="utf-8") as f:
+        urls = [l.strip() for l in f if l.startswith("http")]
+
+    all_links = []
+
+    for url in urls:
+        try:
+            r = requests.get(url, timeout=15)
+            content = r.text.strip()
+
+            # если это base64
+            try:
+                decoded = base64.b64decode(content).decode("utf-8")
+                content = decoded
+            except:
+                pass
+
+            for line in content.splitlines():
+                line = line.strip()
+                if line.startswith("vless://"):
+                    all_links.append(line)
+
+        except:
+            continue
+
+    return list(set(all_links))
 
 
 # ================= VLESS PARSER =================
@@ -36,7 +71,6 @@ def parse_vless(link):
     }
 
 
-# ================= XRAY CONFIG =================
 def build_config(data):
     stream = {
         "network": data["network"],
@@ -83,9 +117,7 @@ def build_config(data):
     }
 
     return {
-        "log": {
-            "loglevel": "warning"
-        },
+        "log": {"loglevel": "warning"},
         "inbounds": [{
             "port": 10808,
             "listen": "127.0.0.1",
@@ -96,7 +128,6 @@ def build_config(data):
     }
 
 
-# ================= XRAY ANTI-BLOCK CHECK =================
 def xray_check(link):
     try:
         data = parse_vless(link)
@@ -112,10 +143,7 @@ def xray_check(link):
             stderr=subprocess.DEVNULL
         )
 
-        # ждём 3 секунды
         time.sleep(3)
-
-        # если процесс не завершился — считаем рабочим
         alive = proc.poll() is None
 
         proc.kill()
@@ -127,25 +155,28 @@ def xray_check(link):
         return False
 
 
-# ================= ASYNC =================
 async def check_vless(link):
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, xray_check, link)
 
 
-async def process_links(links):
+async def main():
+    links = download_subscriptions()
+    print("FOUND LINKS:", len(links))
+
+    if not links:
+        write_files([])
+        return
+
     tasks = [check_vless(link) for link in links]
     results = await asyncio.gather(*tasks)
 
-    alive = []
-    for link, ok in zip(links, results):
-        if ok:
-            alive.append(link)
+    alive = [l for l, ok in zip(links, results) if ok]
 
-    return alive
+    print("ALIVE:", len(alive))
+    write_files(alive)
 
 
-# ================= FILE WRITER =================
 def write_files(alive):
     moscow = datetime.now(ZoneInfo("Europe/Moscow"))
     date_str = moscow.strftime("%d-%m-%Y")
@@ -163,24 +194,6 @@ def write_files(alive):
 
     with open("Molestunnels_base64.txt", "w", encoding="utf-8") as f:
         f.write(encoded)
-
-
-# ================= MAIN =================
-async def main():
-    if not os.path.exists("sslist.txt"):
-        print("sslist.txt not found")
-        write_files([])
-        return
-
-    with open("sslist.txt", "r", encoding="utf-8") as f:
-        links = [l.strip() for l in f if l.startswith("vless://")]
-
-    if not links:
-        write_files([])
-        return
-
-    alive = await process_links(links)
-    write_files(alive)
 
 
 if __name__ == "__main__":
