@@ -4,6 +4,7 @@ import base64
 import json
 from datetime import datetime
 import os
+import time
 
 SS_LIST_FILE = "sslist.txt"
 
@@ -12,13 +13,14 @@ OUTPUT_BASE64 = "Molestunnels_base64.txt"
 
 TIMEOUT = 8
 CONCURRENCY = 50
+MAX_PING = 1.5  # максимальная задержка (в секундах)
 
 STATIC_LINES = [
-"#profile-title:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
-"#subscription-userinfo: upload=0; download=0; total=0; expire=0",
-"#profile-update-interval: 1",
-"#support-url:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
-"#profile-web-page-url:🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
+    "#profile-title:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
+    "#subscription-userinfo: upload=0; download=0; total=0; expire=0",
+    "#profile-update-interval: 1",
+    "#support-url:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
+    "#profile-web-page-url:🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
 ]
 
 
@@ -53,40 +55,66 @@ def extract_keys(text):
     return keys
 
 
-# ================= ПРОВЕРКА =================
+# ================= ИЗВЛЕЧЕНИЕ HOST + PORT =================
 
-def extract_host(key):
+def extract_host_port(key):
     try:
         if key.startswith("vless://"):
             part = key.split("@")[1]
-            return part.split(":")[0]
+            host_port = part.split("?")[0]
+            host, port = host_port.split(":")
+            return host, int(port)
 
         if key.startswith("vmess://"):
             raw = key.replace("vmess://", "")
             padded = raw + "=" * (-len(raw) % 4)
             data = json.loads(base64.b64decode(padded).decode())
-            return data.get("add")
+            host = data.get("add")
+            port = data.get("port")
+            return host, int(port)
     except:
-        return None
+        return None, None
+
+    return None, None
 
 
-async def check_host(session, host):
+# ================= TCP ПРОВЕРКА + ПИНГ =================
+
+async def check_port_with_ping(host, port):
     try:
-        async with session.get(f"http://{host}", timeout=TIMEOUT):
-            return True
+        start = time.perf_counter()
+
+        conn = asyncio.open_connection(host, port)
+        reader, writer = await asyncio.wait_for(conn, timeout=TIMEOUT)
+
+        ping = time.perf_counter() - start
+
+        writer.close()
+        await writer.wait_closed()
+
+        return True, ping
     except:
-        return False
+        return False, None
 
 
-async def validate(session, key):
-    host = extract_host(key)
-    if not host:
+async def validate(key):
+    host, port = extract_host_port(key)
+
+    if not host or not port:
         return None
 
-    if not await check_host(session, host):
+    # первая проверка
+    ok, ping = await check_port_with_ping(host, port)
+    if not ok:
         return None
 
-    if not await check_host(session, host):
+    # удаляем слишком медленные
+    if ping > MAX_PING:
+        return None
+
+    # вторая проверка (твоя логика сохранена)
+    ok2, ping2 = await check_port_with_ping(host, port)
+    if not ok2 or ping2 > MAX_PING:
         return None
 
     return key
@@ -125,7 +153,7 @@ async def main():
 
         async def sem_task(k):
             async with semaphore:
-                return await validate(session, k)
+                return await validate(k)
 
         results = await asyncio.gather(*[sem_task(k) for k in all_keys])
 
