@@ -26,12 +26,12 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 XRAY_CORE_PATH = "xray"
 
 # Ускоренная TCP-проверка
-TCP_CHECK_TIMEOUT = 2           # уменьшен таймаут (было 3)
-TCP_MAX_WORKERS = 300            # увеличено количество потоков (было 200)
+TCP_CHECK_TIMEOUT = 2           # таймаут соединения (сек)
+TCP_MAX_WORKERS = 300            # максимальное количество потоков
 
 # Реальная проверка
 REAL_CHECK_TIMEOUT = 15
-REAL_CHECK_CONCURRENCY = 5
+REAL_CHECK_CONCURRENCY = 9       # количество одновременных процессов Xray (оптимизировано)
 XRAY_STARTUP_DELAY = 2
 TEST_URL = "http://connectivitycheck.gstatic.com/generate_204"
 RETRY_COUNT = 1
