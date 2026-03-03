@@ -6,7 +6,10 @@ from datetime import datetime
 import os
 
 SS_LIST_FILE = "sslist.txt"
-OUTPUT_FILE = "subscription.txt"
+
+OUTPUT_TEXT = "Molestunnels.txt"
+OUTPUT_BASE64 = "Molestunnels_base64.txt"
+
 TIMEOUT = 8
 CONCURRENCY = 50
 
@@ -19,7 +22,7 @@ STATIC_LINES = [
 ]
 
 
-# ===================== ЗАГРУЗКА ПОДПИСОК =====================
+# ================= ЗАГРУЗКА =================
 
 async def fetch_text(session, url):
     try:
@@ -50,7 +53,7 @@ def extract_keys(text):
     return keys
 
 
-# ===================== ПРОВЕРКА =====================
+# ================= ПРОВЕРКА =================
 
 def extract_host(key):
     try:
@@ -80,26 +83,22 @@ async def validate(session, key):
     if not host:
         return None
 
-    first = await check_host(session, host)
-    if not first:
+    if not await check_host(session, host):
         return None
 
-    second = await check_host(session, host)
-    if not second:
+    if not await check_host(session, host):
         return None
 
     return key
 
 
-# ===================== MAIN =====================
+# ================= MAIN =================
 
 async def main():
 
     if not os.path.exists(SS_LIST_FILE):
         print("sslist.txt не найден.")
         return
-
-    print("Читаю sslist.txt...")
 
     with open(SS_LIST_FILE, "r", encoding="utf-8") as f:
         urls = [line.strip() for line in f if line.strip() and not line.startswith("#")]
@@ -109,7 +108,6 @@ async def main():
 
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
 
-        # скачиваем все подписки
         texts = await asyncio.gather(*[fetch_text(session, url) for url in urls])
 
         all_keys = []
@@ -117,15 +115,11 @@ async def main():
         for text in texts:
             if not text:
                 continue
-
             text = decode_if_base64(text)
-            keys = extract_keys(text)
-            all_keys.extend(keys)
+            all_keys.extend(extract_keys(text))
 
         # антидубликат
         all_keys = list(dict.fromkeys(all_keys))
-
-        print(f"Всего собрано ключей: {len(all_keys)}")
 
         semaphore = asyncio.Semaphore(CONCURRENCY)
 
@@ -137,30 +131,35 @@ async def main():
 
     valid = [r for r in results if r]
 
-    print(f"Активных серверов: {len(valid)}")
-
     today = datetime.now().strftime("%d-%m-%Y")
 
     renamed = []
     for i, key in enumerate(valid, 1):
         name = f"СЕРВЕР {i:04d} | ОБНОВЛЕН {today}"
-
         if "#" in key:
             key = key.split("#")[0]
-
         renamed.append(key + "#" + name)
 
     announce = f"#announce: АКТИВНЫХ СЕРВЕРОВ {len(renamed)} | ОБНОВЛЕНО {today}"
 
-    final = []
-    final.extend(STATIC_LINES)
-    final.append(announce)
-    final.extend(renamed)
+    final_lines = []
+    final_lines.extend(STATIC_LINES)
+    final_lines.append(announce)
+    final_lines.extend(renamed)
 
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write("\n".join(final))
+    final_text = "\n".join(final_lines)
 
-    print("Готово.")
+    # ======= СОХРАНЯЕМ ОБЫЧНЫЙ ФАЙЛ =======
+    with open(OUTPUT_TEXT, "w", encoding="utf-8") as f:
+        f.write(final_text)
+
+    # ======= СОХРАНЯЕМ BASE64 =======
+    encoded = base64.b64encode(final_text.encode()).decode()
+
+    with open(OUTPUT_BASE64, "w", encoding="utf-8") as f:
+        f.write(encoded)
+
+    print("Обновлены Molestunnels.txt и Molestunnels_base64.txt")
 
 
 if __name__ == "__main__":
