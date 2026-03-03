@@ -1,130 +1,116 @@
-import asyncio
+import socket
 import base64
-import aiohttp
-import time
+import re
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 INPUT_FILE = "sslist.txt"
-OUTPUT_FILE = "subscription.txt"
+OUTPUT_TXT = "Molestunnels.txt"
+OUTPUT_BASE64 = "Molestunnels_base64.txt"
 
-TIMEOUT = 5
-CHECKS = 3
-MAX_STABILITY = 100  # максимальный допустимый разброс (ms)
+TIMEOUT = 3
+MAX_WORKERS = 100
 
-
-def parse_ss(link):
+# -------------------------------
+# Проверка сервера на доступность
+# -------------------------------
+def check_server(link):
     try:
-        if not link.startswith("ss://"):
+        match = re.search(r'@(.+?):(\d+)', link)
+        if not match:
             return None
 
-        main = link[5:]
-        if "#" in main:
-            main = main.split("#")[0]
+        host = match.group(1)
+        port = int(match.group(2))
 
-        decoded = base64.urlsafe_b64decode(main + "=" * (-len(main) % 4)).decode()
-        method_pass, server_port = decoded.split("@")
-        method, password = method_pass.split(":")
-        server, port = server_port.split(":")
+        start = datetime.now()
+        sock = socket.create_connection((host, port), timeout=TIMEOUT)
+        latency = (datetime.now() - start).total_seconds()
+        sock.close()
 
-        return {
-            "method": method,
-            "password": password,
-            "server": server,
-            "port": int(port),
-        }
+        # Убираем Канаду
+        if "CA" in link.upper() or "CANADA" in link.upper():
+            return None
+
+        return (link, latency)
+
     except:
         return None
 
+# -------------------------------
+# Чтение исходного списка
+# -------------------------------
+with open(INPUT_FILE, "r", encoding="utf-8") as f:
+    links = [line.strip() for line in f if line.strip()]
 
-def is_canada(text):
-    text = text.lower()
-    return "canada" in text or "🇨🇦" in text or " ca" in text
+print(f"Всего серверов: {len(links)}")
 
+# -------------------------------
+# Проверка серверов
+# -------------------------------
+working = []
 
-async def check_once(session, server, port):
-    try:
-        start = time.time()
-        async with session.get(f"http://{server}:{port}", timeout=TIMEOUT):
-            pass
-        return (time.time() - start) * 1000
-    except:
-        return None
+with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    results = executor.map(check_server, links)
 
+for result in results:
+    if result:
+        working.append(result)
 
-async def check_server(session, server_data):
-    latencies = []
+print(f"Рабочих серверов: {len(working)}")
 
-    for _ in range(CHECKS):
-        latency = await check_once(session, server_data["server"], server_data["port"])
-        if latency is not None:
-            latencies.append(latency)
+# -------------------------------
+# Умная сортировка (скорость + стабильность)
+# -------------------------------
+# Сейчас стабильность = факт прохождения проверки
+# Можно расширить позже до истории проверок
 
-    if len(latencies) < 2:
-        return None
+working.sort(key=lambda x: x[1])  # сортировка по latency
 
-    average = sum(latencies) / len(latencies)
-    stability = max(latencies) - min(latencies)
+# -------------------------------
+# Формирование имен
+# -------------------------------
+today = datetime.now().strftime("%d-%m-%Y")
+final_links = []
 
-    if stability > MAX_STABILITY:
-        return None
+for index, (link, latency) in enumerate(working, start=1):
+    number = str(index).zfill(3)
 
-    score = average + stability * 0.5
+    # Получаем флаг из названия (если есть emoji)
+    flag_match = re.search(r'([\U0001F1E6-\U0001F1FF]{2})', link)
+    flag = flag_match.group(1) if flag_match else "🌍"
 
-    server_data["score"] = score
-    return server_data
+    new_name = f"{flag} СЕРВЕР {number} | ОБНОВЛЕН {today}"
 
+    if "#" in link:
+        base = link.split("#")[0]
+    else:
+        base = link
 
-async def main():
-    with open(INPUT_FILE, "r", encoding="utf-8") as f:
-        links = [line.strip() for line in f if line.strip()]
+    final_links.append(f"{base}#{new_name}")
 
-    parsed_servers = []
+# -------------------------------
+# Формирование announce
+# -------------------------------
+active_count = len(final_links)
+announce_line = f"#announce: 🚀 АКТИВНЫХ: {active_count} | 📅 {today}"
 
-    for link in links:
-        if is_canada(link):
-            continue
+subscription_content = [announce_line] + final_links
+subscription_text = "\n".join(subscription_content)
 
-        parsed = parse_ss(link)
-        if parsed:
-            parsed_servers.append(parsed)
+# -------------------------------
+# Сохранение TXT
+# -------------------------------
+with open(OUTPUT_TXT, "w", encoding="utf-8") as f:
+    f.write(subscription_text)
 
-    working_servers = []
+# -------------------------------
+# Сохранение BASE64
+# -------------------------------
+encoded = base64.b64encode(subscription_text.encode("utf-8")).decode("utf-8")
 
-    async with aiohttp.ClientSession() as session:
-        tasks = [check_server(session, server) for server in parsed_servers]
-        results = await asyncio.gather(*tasks)
+with open(OUTPUT_BASE64, "w", encoding="utf-8") as f:
+    f.write(encoded)
 
-        for result in results:
-            if result:
-                working_servers.append(result)
-
-    # сортировка по smart-score
-    working_servers.sort(key=lambda x: x["score"])
-
-    today = datetime.now().strftime("%d-%m-%Y")
-    active_count = len(working_servers)
-
-    final_links = []
-
-    for i, server in enumerate(working_servers, 1):
-        flag = "🌍"  # сюда можно вставить автоопределение страны
-
-        name = f"{flag} СЕРВЕР {i:03d} | ОБНОВЛЕН {today}"
-
-        encoded = base64.urlsafe_b64encode(
-            f"{server['method']}:{server['password']}@{server['server']}:{server['port']}".encode()
-        ).decode().rstrip("=")
-
-        final_links.append(f"ss://{encoded}#{name}")
-
-    announce_line = f"#announce: 🚀 АКТИВНЫХ: {active_count} | 📅 {today}"
-
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write(announce_line + "\n")
-        f.write("\n".join(final_links))
-
-    print("\n" + announce_line)
-    print(f"Сохранено рабочих серверов: {active_count}")
-
-
-asyncio.run(main())
+print("\n" + announce_line)
+print("Подписка успешно обновлена.")
