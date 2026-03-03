@@ -7,19 +7,18 @@ import stat
 import time
 import socket
 import datetime
-from urllib.parse import quote, urlparse
 
 # --- НАСТРОЙКИ ---
 INPUT_FILE = 'links.txt'
 OUTPUT_FILE = 'subscription.txt'
-PLAIN_OUTPUT = 'links_plain.txt' # Файл для чистого списка без Base64
+PLAIN_OUTPUT = 'links_plain.txt'
 CHECKER_URL = "https://github.com/nndrizhu/nodes-checker/releases/latest/download/nodes-checker-linux-amd64"
 CHECKER_PATH = "./nodes-checker"
 BATCH_SIZE = 100 
 
 def download_checker():
     if not os.path.exists(CHECKER_PATH):
-        print("📥 Загрузка чекера (Linux amd64)...")
+        print("📥 Загрузка чекера...")
         r = requests.get(CHECKER_URL, stream=True)
         with open(CHECKER_PATH, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
@@ -36,35 +35,20 @@ def parse_host(link):
             return v_json.get('add')
     except: return None
 
-def get_batch_ip_info(hosts):
-    ips_to_query, host_to_ip = [], {}
-    for h in hosts:
-        if not h: continue
-        try:
-            ip = socket.gethostbyname(h)
-            ips_to_query.append(ip)
-            host_to_ip[h] = ip
-        except: continue
-    if not ips_to_query: return {}
-    try:
-        unique_ips = list(set(ips_to_query))[:BATCH_SIZE]
-        url = "http://ip-api.com/batch?fields=status,query,countryCode,isp,proxy"
-        res = requests.post(url, json=unique_ips, timeout=15).json()
-        ip_map = {i['query']: i for i in res if i.get('status') == 'success'}
-        return {h: ip_map[ip] for h, ip in host_to_ip.items() if ip in ip_map}
-    except: return {}
-
-def rename_server(link, info, index):
-    flag = info.get('countryCode', 'UN')
-    isp = info.get('isp', 'Unknown').split()[0].strip(',. ')
+def rename_server(link, index):
+    """Жесткое переименование в простом формате для максимальной совместимости."""
     num = str(index).zfill(4)
-    date = datetime.datetime.now().strftime("%d-%m-%Y")
-    clean_name = f"[{flag}] {isp} | N{num} | {date}"
+    today = datetime.datetime.now().strftime("%d-%m-%Y")
+    
+    # Формат: SERVER-0001-UPDATED-03-03-2026
+    # Используем тире вместо пробелов и спецсимволов, чтобы Happ не ругался
+    clean_name = f"SERVER-{num}-UPDATED-{today}"
     
     if link.startswith('vless://'):
-        safe_name = quote(clean_name)
-        base_part = link.split('#')[0] if '#' in link else link
-        return f"{base_part}#{safe_name}"
+        # Обрезаем всё после # и ставим наше новое простое имя
+        base_part = link.split('#')[0]
+        return f"{base_part}#{clean_name}"
+    
     elif link.startswith('vmess://'):
         try:
             v_data = json.loads(base64.b64decode(link[8:]).decode('utf-8'))
@@ -100,15 +84,14 @@ def main():
         print("🛑 Ссылок не найдено.")
         return
 
-    # --- НОВОЕ: Перезаписываем links_plain.txt уникальными сырыми ссылками ---
+    # Перезаписываем чистый список ссылок (без переименования)
     with open(PLAIN_OUTPUT, "w", encoding='utf-8') as f:
         f.write("\n".join(raw_links_dict.values()))
-    print(f"📄 Файл {PLAIN_OUTPUT} успешно обновлен и очищен от дублей.")
 
     with open("temp.txt", "w", encoding='utf-8') as f:
         f.write("\n".join(raw_links_dict.values()))
 
-    print(f"🚀 Запуск проверки YouTube для {len(raw_links_dict)} узлов...")
+    print("🚀 Проверка через чекер...")
     try:
         res = subprocess.run(
             [CHECKER_PATH, "-u", "https://www.youtube.com", "-f", "temp.txt", "--format", "json"],
@@ -116,35 +99,29 @@ def main():
         )
         checked_data = json.loads(res.stdout)
     except Exception as e:
-        print(f"❌ Ошибка при работе чекера: {e}")
+        print(f"❌ Ошибка чекера: {e}")
         return
 
+    # Оставляем живые и сортируем по скорости
     alive = sorted([n for n in checked_data if n.get('delay', 0) > 0], key=lambda x: x['delay'])
     
     final = []
     idx = 1
-    for i in range(0, len(alive), BATCH_SIZE):
-        chunk = alive[i:i+BATCH_SIZE]
-        h_list = [parse_host(n['link']) for n in chunk]
-        i_map = get_batch_ip_info(h_list)
-        
-        for n in chunk:
-            host = parse_host(n['link'])
-            info = i_map.get(host)
-            if info and "Cloudflare" not in info.get('isp', ''):
-                final.append(rename_server(n['link'], info, idx))
-                idx += 1
-        time.sleep(1.5)
+    # Нам больше не нужен IP-API, так как мы не пишем провайдера в имя. 
+    # Это еще и ускорит скрипт в разы!
+    for n in alive:
+        final.append(rename_server(n['link'], idx))
+        idx += 1
 
     if final:
-        # Перезаписываем итоговую подписку (Base64)
+        # Сохраняем итоговую подписку (Base64)
         sub_content = "\n".join(final)
         encoded_sub = base64.b64encode(sub_content.encode('utf-8')).decode('utf-8')
         with open(OUTPUT_FILE, "w", encoding='utf-8') as f:
             f.write(encoded_sub)
-        print(f"✨ Готово! Рабочих серверов: {len(final)}")
+        print(f"✨ Успех! Сформировано {len(final)} серверов в жестком формате.")
     else:
-        print("🛑 После фильтрации ничего не осталось.")
+        print("🛑 Рабочих серверов не найдено.")
 
 if __name__ == "__main__":
     main()
