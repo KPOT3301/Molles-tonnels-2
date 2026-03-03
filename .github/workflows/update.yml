@@ -26,11 +26,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests requests[socks]
 
-      # 🔥 СКАЧИВАЕМ XRAY АВТОМАТИЧЕСКИ
+      # ✅ Скачиваем Xray правильно
       - name: Download Xray
         run: |
-          wget https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
-          unzip Xray-linux-64.zip
+          wget -O xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+          unzip -o xray.zip
           chmod +x xray
 
       - name: Run generator
