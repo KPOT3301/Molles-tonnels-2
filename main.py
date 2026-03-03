@@ -11,13 +11,11 @@ import concurrent.futures
 INPUT_FILE = 'links.txt'
 OUTPUT_FILE = 'subscription.txt'
 BATCH_SIZE = 100
-# Таймаут для проверки сервера (в секундах)
 CHECK_TIMEOUT = 5 
-# Количество потоков для проверки (чем больше, тем быстрее)
 MAX_WORKERS = 50
 
 def parse_node(link):
-    """Извлекает хост и порт из ссылки"""
+    """Извлекает хост и порт для проверки TCP соединения"""
     try:
         if link.startswith('vless://'):
             part = link.split('@')[1].split('?')[0].split('#')[0]
@@ -26,16 +24,18 @@ def parse_node(link):
         if link.startswith('vmess://'):
             data = json.loads(base64.b64decode(link[8:]).decode('utf-8'))
             return data.get('add'), int(data.get('port'))
-    except: return None, None
+    except:
+        return None, None
 
 def check_server(link):
-    """Проверяет доступность TCP порта и замеряет задержку"""
+    """Проверяет доступность порта и замеряет задержку"""
     host, port = parse_node(link)
-    if not host or not port: return None
+    if not host or not port:
+        return None
     
     start_time = time.time()
     try:
-        # Простая проверка открытия TCP порта
+        # Прямая проверка TCP порта (заменяет внешний чекер)
         with socket.create_connection((host, port), timeout=CHECK_TIMEOUT):
             delay = int((time.time() - start_time) * 1000)
             return {"link": link, "delay": delay, "host": host}
@@ -43,16 +43,19 @@ def check_server(link):
         return None
 
 def get_batch_ip_info(hosts):
-    """Получает инфо о провайдерах через Batch API"""
-    if not hosts: return {}
+    """Получает гео-данные пакетом по 100 IP"""
+    if not hosts:
+        return {}
     try:
         unique_ips = list(set(hosts))[:100]
         url = "http://ip-api.com/batch?fields=status,query,countryCode,isp,proxy"
         res = requests.post(url, json=unique_ips, timeout=10).json()
         return {i['query']: i for i in res if i.get('status') == 'success'}
-    except: return {}
+    except:
+        return {}
 
 def rename_server(link, info, index):
+    """Форматирует название: [Страна] Провайдер | №0001 | Дата"""
     flag = info.get('countryCode', 'UN')
     isp = info.get('isp', 'Unknown').split()[0].strip(',.')
     num = str(index).zfill(4)
@@ -66,68 +69,68 @@ def rename_server(link, info, index):
             d = json.loads(base64.b64decode(link[8:]).decode('utf-8'))
             d['ps'] = new_ps
             return "vmess://" + base64.b64encode(json.dumps(d).encode('utf-8')).decode('utf-8')
-        except: return link
+        except:
+            return link
     return link
 
 def main():
-    print(f"🚀 Запуск обновления подписки: {datetime.datetime.now()}")
+    print(f"🚀 Запуск процесса: {datetime.datetime.now()}")
     raw_links = {}
     
-    # 1. Сбор ссылок
+    # 1. Сбор ссылок из источников
     if os.path.exists(INPUT_FILE):
         with open(INPUT_FILE, 'r') as f:
             sources = [l.strip() for l in f if l.strip() and not l.startswith('#')]
         
         for url in sources:
-            print(f"📡 Загрузка: {url}")
             try:
                 r = requests.get(url, timeout=15)
                 data = r.text
-                try: data = base64.b64decode(data.strip()).decode('utf-8')
-                except: pass
+                try:
+                    data = base64.b64decode(data.strip()).decode('utf-8')
+                except:
+                    pass
                 for line in data.splitlines():
-                    l = line.strip()
-                    if l.startswith(('vless://', 'vmess://')):
-                        raw_links[l.split('#')[0]] = l
-            except: continue
+                    if line.strip().startswith(('vless://', 'vmess://')):
+                        # Дедупликация: сохраняем только одну уникальную ссылку
+                        raw_links[line.strip().split('#')[0]] = line.strip()
+            except Exception as e:
+                print(f"⚠️ Ошибка загрузки {url}: {e}")
 
-    if not raw_links:
-        print("🛑 Ссылок не найдено."); return
-
-    # 2. Многопоточная проверка
-    print(f"⚡ Проверка {len(raw_links)} серверов в {MAX_WORKERS} потоках...")
+    # 2. Многопоточная проверка серверов
     alive_nodes = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        results = list(executor.map(check_server, raw_links.values()))
-        alive_nodes = [r for r in results if r]
+    if raw_links:
+        print(f"📡 Проверка {len(raw_links)} уникальных серверов...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            results = list(executor.map(check_server, raw_links.values()))
+            # Фильтруем живые и сортируем по пингу
+            alive_nodes = sorted([r for r in results if r], key=lambda x: x['delay'])
 
-    # Сортировка по задержке
-    alive_nodes.sort(key=lambda x: x['delay'])
-    print(f"✅ Найдено живых серверов: {len(alive_nodes)}")
-
-    # 3. Фильтрация IP и переименование
+    # 3. Фильтрация Cloudflare и переименование
     final_list = []
-    idx = 1
-    for i in range(0, len(alive_nodes), BATCH_SIZE):
-        chunk = alive_nodes[i:i+BATCH_SIZE]
-        hosts = [n['host'] for n in chunk]
-        i_map = get_batch_ip_info(hosts)
-        
-        for n in chunk:
-            info = i_map.get(n['host'])
-            if info and "Cloudflare" not in info.get('isp', ''):
-                final_list.append(rename_server(n['link'], info, idx))
-                idx += 1
-        time.sleep(1)
+    if alive_nodes:
+        print(f"🌍 Получение данных об IP для {len(alive_nodes)} серверов...")
+        for i in range(0, len(alive_nodes), BATCH_SIZE):
+            chunk = alive_nodes[i:i+BATCH_SIZE]
+            i_map = get_batch_ip_info([n['host'] for n in chunk])
+            
+            for n in chunk:
+                info = i_map.get(n['host'])
+                # Отсеиваем Cloudflare (WARP) для повышения качества списка
+                if info and "Cloudflare" not in info.get('isp', ''):
+                    final_list.append(rename_server(n['link'], info, len(final_list) + 1))
+            time.sleep(1)
 
-    # 4. Сохранение
+    # 4. Сохранение результата (всегда перезаписывает файл)
     if final_list:
         content = base64.b64encode("\n".join(final_list).encode('utf-8')).decode('utf-8')
         with open(OUTPUT_FILE, "w") as f:
             f.write(content)
-        print(f"✨ Готово! Файл {OUTPUT_FILE} обновлен. Серверов: {len(final_list)}")
+        print(f"✨ Успех! Сформировано серверов: {len(final_list)}")
     else:
-        print("🛑 После фильтрации список пуст.")
+        # Создаем пустой файл, чтобы Git Action не выдавал ошибку
+        open(OUTPUT_FILE, 'w').close()
+        print("🛑 Рабочих серверов не найдено. Создан пустой файл.")
 
 if __name__ == "__main__":
     main()
