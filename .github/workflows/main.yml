@@ -1,40 +1,58 @@
-name: Update VPN Subscription
+name: Speed Filter Update
 
 on:
   schedule:
-    - cron: '0 21 * * *'
-  workflow_dispatch: 
+    - cron: '0 */6 * * *' # Запуск каждые 6 часов
+  workflow_dispatch:      # Возможность запустить вручную кнопкой
 
 permissions:
-  contents: write
+  contents: write         # Даем права на запись в репозиторий
 
 jobs:
-  build:
+  update-nodes:
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout code
+      - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Подгружаем всю историю для корректного пуша
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
-        run: pip install requests
-
-      - name: Run script
-        # ВАЖНО: запуск именно GENERATOR.py
-        run: python GENERATOR.py
-
-      - name: Commit and Push
+      - name: Install Dependencies
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add subscription.txt links_plain.txt
-          if git diff --staged --quiet; then
-            echo "No changes"
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Run Speedtest Script
+        run: python main.py
+
+      - name: Check for Changes
+        id: git-check
+        run: |
+          git status
+          # Проверяем, изменились ли наши выходные файлы
+          if [[ -n "$(git status --porcelain subscription.txt links_plain.txt)" ]]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
           else
-            git commit -m "Auto-update $(date +'%d-%m-%Y')"
-            git push
+            echo "changed=false" >> $GITHUB_OUTPUT
           fi
+
+      - name: Commit and Push Changes
+        if: steps.git-check.outputs.changed == 'true'
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Добавляем конкретные файлы
+          git add subscription.txt links_plain.txt
+          
+          # Создаем коммит с текущей датой
+          git commit -m "Auto-update nodes: $(date +'%d-%m-%Y %H:%M') [Speed > 5Mbps]"
+          
+          # Пушим изменения
+          git push origin main
