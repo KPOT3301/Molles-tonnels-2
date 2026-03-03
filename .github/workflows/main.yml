@@ -2,8 +2,8 @@ name: Update VPN Subscription
 
 on:
   schedule:
-    - cron: '0 */6 * * *' # Запуск каждые 6 часов
-  workflow_dispatch: # Возможность ручного запуска
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -30,23 +30,19 @@ jobs:
         run: |
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
-          # Добавляем файл, если он был создан
           if [ -f subscription.txt ]; then
             git add subscription.txt
-            # Коммитим только если есть реальные изменения в файле
-            git diff --quiet && git diff --staged --quiet || git commit -m "Update subscription $(date +'%d-%m-%Y')"
+            git diff --quiet && git diff --staged --quiet || git commit -m "Update $(date +'%d-%m-%Y')"
             git push
-          else
-            echo "Файл subscription.txt не найден, пропускаем коммит."
           fi
 
       - name: Release Latest
+        if: success() && hashFiles('subscription.txt') != ''
         uses: softprops/action-gh-release@v1
-        if: success()
         with:
           files: subscription.txt
           tag_name: latest
           name: "VPN Subscription Updated"
-          body: "Последнее обновление: $(date +'%d-%m-%Y %H:%M')"
+          body: "Обновлено: $(date +'%d-%m-%Y %H:%M')"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
