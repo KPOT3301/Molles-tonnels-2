@@ -1,40 +1,40 @@
-name: Generate Subscription
+name: Generator
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 21 * * *'  # 00:00 Moscow (UTC+3)
+  push:
+    branches: [ main ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0 # saxo для pull --rebase
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install aiohttp requests psutil rich art
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests psutil
 
-      - name: Run Generator
-        run: python GENERATOR.py
+    - name: Ensure sslist.txt exists
+      run: |
+        if [ ! -f sslist.txt ]; then
+          echo "sslist.txt not found!"
+          exit 1
+        fi
 
-      - name: Commit and push if changed
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "actions@github.com"
-          git add Molestunnels.txt Molestunnels.base64.txt
-          # Если нет изменений — выходим без ошибки
-          git diff --cached --quiet && exit 0
-          git commit -a -m "Auto update tunnels"
-          # Проверяем изменения еще раз
-          git pull --rebase origin main
-          git push origin main
+    - name: Run Generator
+      run: python GENERATOR.py
+
+    - name: Upload result file
+      uses: actions/upload-artifact@v4
+      with:
+        name: checked
+        path: checked.txt
