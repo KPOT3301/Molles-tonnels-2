@@ -2,9 +2,10 @@ import asyncio
 import aiohttp
 import base64
 import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import os
 import time
+import socket
 
 SS_LIST_FILE = "sslist.txt"
 
@@ -12,8 +13,10 @@ OUTPUT_TEXT = "Molestunnels.txt"
 OUTPUT_BASE64 = "Molestunnels_base64.txt"
 
 TIMEOUT = 6
-CONCURRENCY = 20
+CONCURRENCY = 25
 MIN_SCORE = 60
+
+MOSCOW_TZ = timezone(timedelta(hours=3))
 
 STATIC_LINES = [
 "#profile-title:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
@@ -46,16 +49,15 @@ def decode_if_base64(text):
 
 
 def extract_keys(text):
-    lines = text.splitlines()
     keys = []
-    for line in lines:
+    for line in text.splitlines():
         line = line.strip()
-        if line.startswith("vless://") or line.startswith("vmess://"):
+        if line.startswith(("vless://", "vmess://")):
             keys.append(line)
     return keys
 
 
-# ================= ИЗВЛЕЧЕНИЕ HOST/PORT =================
+# ================= ПАРСИНГ =================
 
 def extract_host_port(key):
     try:
@@ -73,13 +75,18 @@ def extract_host_port(key):
     except:
         return None, None
 
+    return None, None
+
 
 # ================= ПРОВЕРКА =================
 
 async def check_tcp(host, port):
     try:
         start = time.perf_counter()
-        reader, writer = await asyncio.open_connection(host, port)
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port),
+            timeout=TIMEOUT
+        )
         latency = time.perf_counter() - start
         writer.close()
         await writer.wait_closed()
@@ -92,7 +99,7 @@ def calculate_score(latency):
     if latency is None:
         return 0
 
-    score = 50  # TCP открыт
+    score = 50
 
     if latency < 0.4:
         score += 40
@@ -119,7 +126,7 @@ async def validate(key, semaphore):
     if score < MIN_SCORE:
         return None
 
-    return (score, latency, key)
+    return score, latency, key
 
 
 # ================= MAIN =================
@@ -137,7 +144,6 @@ async def main():
     timeout = aiohttp.ClientTimeout(total=TIMEOUT)
 
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-
         texts = await asyncio.gather(*[fetch_text(session, url) for url in urls])
 
     all_keys = []
@@ -150,26 +156,22 @@ async def main():
     all_keys = list(dict.fromkeys(all_keys))
 
     semaphore = asyncio.Semaphore(CONCURRENCY)
-
     tasks = [validate(k, semaphore) for k in all_keys]
     results = await asyncio.gather(*tasks)
 
     valid = [r for r in results if r]
 
-    # сортировка по score, потом по latency
     valid.sort(key=lambda x: (-x[0], x[1]))
 
-    today = datetime.now().strftime("%d-%m-%Y")
+    now_moscow = datetime.now(MOSCOW_TZ)
+    today = now_moscow.strftime("%d-%m-%Y")
 
     renamed = []
 
     for i, (score, latency, key) in enumerate(valid, 1):
-
         name = f"СЕРВЕР {i:04d} | {latency:.2f}s | ОБНОВЛЕН {today}"
-
         if "#" in key:
             key = key.split("#")[0]
-
         renamed.append(key + "#" + name)
 
     announce = f"#announce: АКТИВНЫХ {len(renamed)} | ОБНОВЛЕНО {today}"
