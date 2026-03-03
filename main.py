@@ -4,6 +4,7 @@ from urllib.parse import quote
 # --- НАСТРОЙКИ ---
 INPUT_FILE = 'links.txt'
 OUTPUT_FILE = 'subscription.txt'
+PLAIN_OUTPUT = 'links_plain.txt' # Добавили явный вывод чистого списка
 
 def check_node(host, port=443, timeout=2):
     try:
@@ -38,7 +39,7 @@ def get_ip_info(host):
     return {'countryCode': 'UN', 'isp': 'Unknown'}
 
 def main():
-    print(f"🚀 Запуск обновления (чистка скобок): {datetime.datetime.now()}")
+    print(f"🚀 Старт полной очистки: {datetime.datetime.now()}")
     
     unique_links = {}
     if os.path.exists(INPUT_FILE):
@@ -54,7 +55,8 @@ def main():
                 for line in content.splitlines():
                     raw_line = line.strip()
                     if raw_line.startswith(('vless://', 'vmess://')):
-                        # УДАЛЯЕМ ВСЁ ПОСЛЕ # (убираем [RU] и прочий мусор из оригинала)
+                        # РАДИКАЛЬНОЕ ОТРЕЗАНИЕ ВСЕГО ПОСЛЕ #
+                        # Это убирает [RU], [AM] и прочее из исходника
                         clean_link = raw_line.split('#')[0]
                         if clean_link not in unique_links:
                             unique_links[clean_link] = clean_link
@@ -73,16 +75,15 @@ def main():
         
         if host and check_node(host, port):
             info = get_ip_info(host)
-            # Убираем любые скобки, если они вдруг пришли из API
+            # Убираем любые скобки из данных API
             country = info.get('countryCode', 'UN').replace('[', '').replace(']', '')
             isp = info.get('isp', 'ISP').split()[0].replace('[', '').replace(']', '').strip(',.')
             
-            # ФОРМАТ: RU Yandex | N0001 | 03-03-2026
-            # (Используем латинскую N вместо № для надежности)
+            # Чистое имя без скобок
             name_str = f"{country} {isp} | N{str(idx).zfill(4)} | {today}"
             
             if base_link.startswith('vless://'):
-                # Кодируем имя, чтобы HAPP не споткнулся
+                # Формируем чистую ссылку: база#имя
                 final_configs.append(f"{base_link}#{quote(name_str)}")
             elif base_link.startswith('vmess://'):
                 try:
@@ -96,10 +97,16 @@ def main():
             if idx > 400: break
 
     if final_configs:
+        # 1. Сохраняем links_plain.txt (открытый список)
+        with open(PLAIN_OUTPUT, "w", encoding='utf-8') as f:
+            f.write("\n".join(final_configs))
+            
+        # 2. Сохраняем subscription.txt (Base64)
         out_data = base64.b64encode("\n".join(final_configs).encode('utf-8')).decode('utf-8')
         with open(OUTPUT_FILE, "w", encoding='utf-8') as f:
             f.write(out_data)
-        print(f"✨ Готово! Сохранено {len(final_configs)} серверов. Скобки полностью удалены.")
+            
+        print(f"✨ Готово! Файлы {OUTPUT_FILE} и {PLAIN_OUTPUT} очищены от скобок.")
 
 if __name__ == "__main__":
     main()
