@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GENERATOR.py – Оптимизированная проверка Vless серверов с фильтром по latency (≤500 мс)
+# GENERATOR.py – Полностью автоматическая проверка Vless серверов с красивым оформлением подписки и нумерацией серверов
 
 import re
 import socket
@@ -13,19 +13,27 @@ import os
 from urllib.parse import urlparse, parse_qs
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
+from datetime import datetime
 import requests
 
-# Настройка логирования – можно оставить INFO, если не нужна отладка
+# Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Константы
+# ---------- Константы для оформления подписки ----------
+PROFILE_TITLE = "🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
+SUPPORT_URL = "🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
+PROFILE_WEB_PAGE_URL = "🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
+PROFILE_UPDATE_INTERVAL = "1"
+SUBSCRIPTION_USERINFO = "upload=0; download=0; total=0; expire=0"
+
+# ---------- Основные константы ----------
 SOURCES_FILE = "sources.txt"
 OUTPUT_FILE = "subscription.txt"
 REQUEST_TIMEOUT = 10
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 XRAY_CORE_PATH = "xray"
 
-# Ускоренная TCP-проверка
+# TCP-проверка
 TCP_CHECK_TIMEOUT = 2
 TCP_MAX_WORKERS = 300
 
@@ -36,7 +44,7 @@ REAL_CHECK_CONCURRENCY = 9
 XRAY_STARTUP_DELAY = 3
 RETRY_COUNT = 1
 
-# Список тестовых URL (возвращают 204)
+# Тестовые URL
 TEST_URLS = [
     "http://connectivitycheck.gstatic.com/generate_204",
     "https://connectivitycheck.gstatic.com/generate_204",
@@ -45,10 +53,10 @@ TEST_URLS = [
     "http://www.google.com/generate_204"
 ]
 
-# Порог задержки (мс) – серверы с задержкой выше этого значения будут отбрасываться. 0 = отключено.
-MAX_LATENCY_MS = 800  # 0.8 секунды
+# Порог задержки (мс) – серверы с задержкой выше этого значения отбрасываются. 0 = отключено.
+MAX_LATENCY_MS = 500   # 0.5 секунды
 
-# Режим работы: True – только TCP (быстро), False – полная проверка
+# Режим только TCP (быстро, но менее точно)
 ONLY_TCP = False
 
 @lru_cache(maxsize=256)
@@ -362,10 +370,34 @@ def filter_working_links(links):
     return working_real
 
 def save_working_links(links):
+    """
+    Сохраняет рабочие ссылки в subscription.txt с красивыми заголовками.
+    Каждая ссылка получает тег вида: #СЕРВЕР 0001 | ОБНОВЛЕН ДД-ММ-ГГГГ
+    """
+    today = datetime.now().strftime("%d-%m-%Y")
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        for link in links:
-            f.write(link + '\n')
-    logging.info(f"💾 Сохранено {len(links)} рабочих ссылок в {OUTPUT_FILE}")
+        # Заголовки подписки
+        f.write(f"#profile-title:{PROFILE_TITLE}\n")
+        f.write(f"#subscription-userinfo:{SUBSCRIPTION_USERINFO}\n")
+        f.write(f"#profile-update-interval:{PROFILE_UPDATE_INTERVAL}\n")
+        f.write(f"#support-url:{SUPPORT_URL}\n")
+        f.write(f"#profile-web-page-url:{PROFILE_WEB_PAGE_URL}\n")
+        f.write(f"#announce: АКТИВНЫХ СЕРВЕРОВ {len(links)} | ОБНОВЛЕНО {today}\n")
+
+        # Сами ссылки с нумерацией
+        for idx, link in enumerate(links, start=1):
+            # Формируем номер с ведущими нулями (0001, 0002, ...)
+            server_num = f"{idx:04d}"
+            tag = f"#СЕРВЕР {server_num} | ОБНОВЛЕН {today}"
+
+            # Удаляем существующий фрагмент (всё после #), если он есть
+            if '#' in link:
+                link = link.split('#')[0]
+            # Добавляем наш тег
+            link_with_tag = link + tag
+            f.write(link_with_tag + '\n')
+
+    logging.info(f"💾 Сохранено {len(links)} рабочих ссылок в {OUTPUT_FILE} с заголовками и нумерацией.")
 
 def check_xray_available():
     try:
