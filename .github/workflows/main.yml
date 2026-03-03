@@ -1,57 +1,40 @@
-name: Speed Filter Update
+name: Update VPN Subscription
 
 on:
   schedule:
-    - cron: '0 */6 * * *' # Автозапуск каждые 6 часов
-  workflow_dispatch:      # Кнопка для ручного запуска
+    - cron: '0 21 * * *'
+  workflow_dispatch: 
 
 permissions:
-  contents: write         # Разрешение на запись изменений в репозиторий
+  contents: write
 
 jobs:
-  update-nodes:
+  build:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout Repository
+      - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests
+      - name: Install dependencies
+        run: pip install requests
 
-      - name: Run Generator Script
-        run: |
-          if [ -f "GENERATOR.py" ]; then
-            python GENERATOR.py
-          else
-            echo "❌ Ошибка: Файл GENERATOR.py не найден!"
-            ls -R
-            exit 1
-          fi
+      - name: Run script
+        # ВАЖНО: запуск именно GENERATOR.py
+        run: python GENERATOR.py
 
-      - name: Commit and Push Changes
+      - name: Commit and Push
         run: |
-          git config --local user.name "github-actions[bot]"
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Создаем файлы, если скрипт их не создал (страховка от ошибок Git)
-          touch subscription.txt links_plain.txt
-          
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add subscription.txt links_plain.txt
-          
-          # Проверяем наличие изменений перед коммитом
           if git diff --staged --quiet; then
-            echo "Изменений нет, пропускаем пуш."
+            echo "No changes"
           else
-            git commit -m "Auto-update nodes: $(date +'%d-%m-%Y %H:%M') [Speed > 5Mbps]"
-            git push origin main
+            git commit -m "Auto-update $(date +'%d-%m-%Y')"
+            git push
           fi
