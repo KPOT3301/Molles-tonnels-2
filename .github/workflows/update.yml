@@ -2,7 +2,7 @@ name: Update Subscription
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # каждые 30 минут
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -10,24 +10,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
-        run: pip install requests
+      - run: pip install -r requirements.txt
 
-      - name: Run GENERATOR
-        run: python GENERATOR.py
+      - run: python GENERATOR.py
 
       - name: Commit changes
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add subscription.txt links_plain.txt
-          git diff --quiet && git diff --staged --quiet || git commit -m "Auto update subscription"
+          git add links_plain.txt subscription.txt
+          git commit -m "Auto update" || echo "No changes"
           git push
