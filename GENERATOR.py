@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GENERATOR.py – Оптимизированная проверка Vless серверов (двухэтапная)
+# GENERATOR.py – Оптимизированная проверка Vless серверов (двухэтапная, с ускоренной TCP)
 
 import re
 import socket
@@ -12,6 +12,7 @@ import tempfile
 import os
 from urllib.parse import urlparse, parse_qs
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 import requests
 
 # Настройка логирования
@@ -24,22 +25,27 @@ REQUEST_TIMEOUT = 10
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 XRAY_CORE_PATH = "xray"
 
-# Настройки TCP-проверки (быстрый этап)
-TCP_CHECK_TIMEOUT = 3           # таймаут соединения (сек)
-TCP_MAX_WORKERS = 200            # максимальное количество потоков
+# Ускоренная TCP-проверка
+TCP_CHECK_TIMEOUT = 2           # уменьшен таймаут (было 3)
+TCP_MAX_WORKERS = 300            # увеличено количество потоков (было 200)
 
-# Настройки реальной проверки (точный этап)
+# Реальная проверка
 REAL_CHECK_TIMEOUT = 15
-REAL_CHECK_CONCURRENCY = 5       # количество одновременных процессов Xray
-XRAY_STARTUP_DELAY = 2           # секунд на запуск Xray
+REAL_CHECK_CONCURRENCY = 5
+XRAY_STARTUP_DELAY = 2
 TEST_URL = "http://connectivitycheck.gstatic.com/generate_204"
-RETRY_COUNT = 1                  # уменьшим число повторов
+RETRY_COUNT = 1
 
-# Режим работы: если ONLY_TCP=True, то будет только TCP-проверка (быстро, но менее точно)
-ONLY_TCP = False  # можно переключить в True, если нужно быстро
+# Режим работы: True – только TCP (быстро), False – полная проверка
+ONLY_TCP = False
+
+@lru_cache(maxsize=256)
+def resolve_host(host):
+    """Кэширует IP-адрес по имени хоста для ускорения повторных запросов."""
+    return socket.gethostbyname(host)
 
 def read_sources():
-    # ... (без изменений)
+    """Читает файл sources.txt, игнорирует пустые строки и комментарии."""
     sources = []
     try:
         with open(SOURCES_FILE, 'r', encoding='utf-8') as f:
@@ -53,7 +59,7 @@ def read_sources():
     return sources
 
 def fetch_content(url):
-    # ... (без изменений)
+    """Загружает содержимое по URL."""
     try:
         headers = {'User-Agent': USER_AGENT}
         resp = requests.get(url, timeout=REQUEST_TIMEOUT, headers=headers)
@@ -64,9 +70,11 @@ def fetch_content(url):
         return None
 
 def extract_vless_links_from_text(text):
+    """Извлекает все ссылки vless:// из текста."""
     return re.findall(r'vless://[^\s<>"\']+', text)
 
 def decode_base64_content(encoded):
+    """Декодирует base64, если возможно."""
     try:
         encoded = encoded.strip()
         decoded = base64.b64decode(encoded).decode('utf-8', errors='ignore')
@@ -75,7 +83,7 @@ def decode_base64_content(encoded):
         return encoded
 
 def gather_all_links(sources):
-    # ... (без изменений)
+    """Собирает все уникальные Vless-ссылки из всех источников."""
     all_links = set()
     for src in sources:
         if src.startswith('vless://'):
@@ -100,7 +108,10 @@ def gather_all_links(sources):
     return list(all_links)
 
 def parse_vless_link(link):
-    # ... (без изменений)
+    """
+    Парсит vless:// ссылку и извлекает параметры.
+    Возвращает словарь или None.
+    """
     try:
         without_proto = link[8:]
         at_index = without_proto.find('@')
@@ -116,6 +127,7 @@ def parse_vless_link(link):
 
         params = parse_qs(parsed.query)
         security = params.get('security', ['none'])[0]
+        # Нормализация опечатки tsl -> tls
         if security == 'tsl':
             security = 'tls'
             logging.debug(f"Нормализовано security: tsl -> tls для {link[:60]}")
@@ -142,7 +154,7 @@ def parse_vless_link(link):
         return None
 
 def create_xray_config(vless_config):
-    # ... (без изменений)
+    """Генерирует JSON конфигурацию для Xray-core."""
     config = {
         "log": {"loglevel": "error"},
         "inbounds": [
@@ -211,16 +223,18 @@ def create_xray_config(vless_config):
     return config
 
 def check_tcp(link):
-    """Быстрая TCP-проверка: пытается соединиться с хостом:порт."""
+    """Быстрая TCP-проверка с кэшированием DNS."""
     parsed = parse_vless_link(link)
     if not parsed:
         return (link, False)
     host = parsed['host']
     port = parsed['port']
     try:
+        # Используем кэшированный IP
+        ip = resolve_host(host)
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(TCP_CHECK_TIMEOUT)
-        result = sock.connect_ex((host, port))
+        result = sock.connect_ex((ip, port))
         sock.close()
         return (link, result == 0)
     except Exception as e:
@@ -272,7 +286,7 @@ def check_vless_real(link):
                 logging.debug(f"Попытка {attempt+1} не удалась: {e}")
                 time.sleep(1)
 
-        # Если не удалось, читаем stderr
+        # Если не удалось, читаем stderr Xray для диагностики
         if process:
             stdout, stderr = process.communicate(timeout=2)
             if stderr:
@@ -297,7 +311,7 @@ def filter_working_links(links):
     total = len(links)
 
     # Этап 1: TCP-проверка всех ссылок
-    logging.info(f"🌐 Этап 1: TCP-проверка {total} ссылок (параллельность {TCP_MAX_WORKERS})...")
+    logging.info(f"🌐 Этап 1: TCP-проверка {total} ссылок (параллельность {TCP_MAX_WORKERS}, таймаут {TCP_CHECK_TIMEOUT}с)...")
     tcp_ok = []
     with ThreadPoolExecutor(max_workers=TCP_MAX_WORKERS) as executor:
         future_to_link = {executor.submit(check_tcp, link): link for link in links}
@@ -335,12 +349,14 @@ def filter_working_links(links):
     return working_real
 
 def save_working_links(links):
+    """Сохраняет рабочие ссылки в subscription.txt (перезаписывает файл)."""
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         for link in links:
             f.write(link + '\n')
     logging.info(f"💾 Сохранено {len(links)} рабочих ссылок в {OUTPUT_FILE}")
 
 def check_xray_available():
+    """Проверяет доступность Xray-core."""
     try:
         result = subprocess.run([XRAY_CORE_PATH, '--version'], capture_output=True, text=True, timeout=5)
         if result.returncode == 0:
