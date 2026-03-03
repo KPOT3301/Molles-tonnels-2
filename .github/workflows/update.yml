@@ -2,6 +2,8 @@ name: Generator
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 21 * * *"   # 00:00 по Москве (UTC+3)
   push:
     branches: [ main ]
 
@@ -9,32 +11,38 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: write
+
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.11"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install requests psutil
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install aiohttp
 
-    - name: Ensure sslist.txt exists
-      run: |
-        if [ ! -f sslist.txt ]; then
-          echo "sslist.txt not found!"
-          exit 1
-        fi
+      - name: Ensure servers.txt exists
+        run: |
+          if [ ! -f servers.txt ]; then
+            echo "servers.txt not found!"
+            exit 1
+          fi
 
-    - name: Run Generator
-      run: python GENERATOR.py
+      - name: Run Generator
+        run: python GENERATOR.py
 
-    - name: Upload result file
-      uses: actions/upload-artifact@v4
-      with:
-        name: checked
-        path: checked.txt
+      - name: Commit updated cache and results
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+          git add best_cache.json TOP100.txt
+          git commit -m "Auto update results $(date -u)" || echo "No changes"
+          git push
