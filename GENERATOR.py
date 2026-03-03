@@ -1,3 +1,121 @@
+import asyncio
+import aiohttp
+import base64
+import socket
+import re
+import time
+from urllib.parse import urlparse
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+INPUT_FILE = "sslist.txt"
+OUTPUT_FILE = "Molestunnels.txt"
+BASE64_FILE = "Molestunnels_base64.txt"
+
+CONCURRENCY = 300
+TIMEOUT = 1.5
+
+PROFILE_TITLE = "🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
+
+
+# -------------------- EXTRACT VLESS --------------------
+
+def extract_vless(text):
+    return list(set(re.findall(r'vless://[^\s]+', text)))
+
+
+# -------------------- COUNTRY FLAG --------------------
+
+def country_to_flag(code):
+    if not code or len(code) != 2:
+        return "🌍"
+    return chr(ord(code[0].upper()) + 127397) + chr(ord(code[1].upper()) + 127397)
+
+
+async def fetch_country(session, ip):
+    try:
+        url = f"http://ip-api.com/json/{ip}?fields=countryCode"
+        async with session.get(url, timeout=2) as resp:
+            data = await resp.json()
+            return country_to_flag(data.get("countryCode"))
+    except:
+        return "🌍"
+
+
+# -------------------- FETCH SOURCES --------------------
+
+async def fetch(session, url):
+    try:
+        async with session.get(url, timeout=TIMEOUT) as response:
+            return await response.text()
+    except:
+        return ""
+
+
+# -------------------- TCP CHECK WITH LATENCY --------------------
+
+async def check_once(host, port):
+    try:
+        start = time.perf_counter()
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port),
+            timeout=TIMEOUT
+        )
+        latency = (time.perf_counter() - start) * 1000
+        writer.close()
+        await writer.wait_closed()
+        return latency
+    except:
+        return None
+
+
+# -------------------- SERVER CHECK --------------------
+
+async def check_server(config, semaphore, session):
+    try:
+        parsed = urlparse(config)
+        host = parsed.hostname
+        port = parsed.port
+
+        if not host or not port:
+            return None
+
+        async with semaphore:
+
+            first = await check_once(host, port)
+            if first is None:
+                return None
+
+            await asyncio.sleep(0.3)
+
+            second = await check_once(host, port)
+            if second is None:
+                return None
+
+            avg_latency = (first + second) / 2
+
+            ip = host
+            try:
+                ip = socket.gethostbyname(host)
+            except:
+                pass
+
+            flag = await fetch_country(session, ip)
+
+            clean_config = config.split("#")[0]
+
+            return {
+                "config": clean_config,
+                "latency": avg_latency,
+                "flag": flag
+            }
+
+    except:
+        return None
+
+
+# -------------------- MAIN --------------------
+
 async def main():
     print("Reading sources...")
 
@@ -8,7 +126,6 @@ async def main():
         print("No sslist.txt found.")
         return
 
-    # Дата ДД-ММ-ГГГГ
     moscow_time = datetime.now(ZoneInfo("Europe/Moscow"))
     update_date = moscow_time.strftime("%d-%m-%Y")
 
@@ -44,7 +161,7 @@ async def main():
         print("WARNING: No alive configs found!")
         return
 
-    # Сортировка по скорости (но без ограничения количества)
+    # Сортировка по скорости (без ограничения количества)
     alive.sort(key=lambda x: x["latency"])
 
     print(f"Total alive servers: {len(alive)}")
@@ -64,7 +181,7 @@ async def main():
         "#profile-update-interval: 1",
         f"#support-url:{PROFILE_TITLE}",
         f"#profile-web-page-url:{PROFILE_TITLE}",
-        f"#announce: 🚀 РАБОЧИХ {len(formatted)} | 📅 {update_date}"
+        f"#announce: 🚀 РАБОЧИХ {len(alive)} | 📅 {update_date}"
     ]
 
     print("Writing files...")
@@ -80,3 +197,7 @@ async def main():
         f.write(base64_data)
 
     print("Done.")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
