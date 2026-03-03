@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GENERATOR.py – с улучшенной диагностикой и fallback на TCP
+# GENERATOR.py – Оптимизированная проверка Vless серверов (двухэтапная)
 
 import re
 import socket
@@ -14,22 +14,32 @@ from urllib.parse import urlparse, parse_qs
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
-# Настройка логирования – временно включён DEBUG для диагностики
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+# Настройка логирования
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# Константы
 SOURCES_FILE = "sources.txt"
 OUTPUT_FILE = "subscription.txt"
 REQUEST_TIMEOUT = 10
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 XRAY_CORE_PATH = "xray"
 
-REAL_CHECK_TIMEOUT = 20
-REAL_CHECK_CONCURRENCY = 3
-XRAY_STARTUP_DELAY = 3
+# Настройки TCP-проверки (быстрый этап)
+TCP_CHECK_TIMEOUT = 3           # таймаут соединения (сек)
+TCP_MAX_WORKERS = 200            # максимальное количество потоков
+
+# Настройки реальной проверки (точный этап)
+REAL_CHECK_TIMEOUT = 15
+REAL_CHECK_CONCURRENCY = 5       # количество одновременных процессов Xray
+XRAY_STARTUP_DELAY = 2           # секунд на запуск Xray
 TEST_URL = "http://connectivitycheck.gstatic.com/generate_204"
-RETRY_COUNT = 2
+RETRY_COUNT = 1                  # уменьшим число повторов
+
+# Режим работы: если ONLY_TCP=True, то будет только TCP-проверка (быстро, но менее точно)
+ONLY_TCP = False  # можно переключить в True, если нужно быстро
 
 def read_sources():
+    # ... (без изменений)
     sources = []
     try:
         with open(SOURCES_FILE, 'r', encoding='utf-8') as f:
@@ -43,6 +53,7 @@ def read_sources():
     return sources
 
 def fetch_content(url):
+    # ... (без изменений)
     try:
         headers = {'User-Agent': USER_AGENT}
         resp = requests.get(url, timeout=REQUEST_TIMEOUT, headers=headers)
@@ -64,6 +75,7 @@ def decode_base64_content(encoded):
         return encoded
 
 def gather_all_links(sources):
+    # ... (без изменений)
     all_links = set()
     for src in sources:
         if src.startswith('vless://'):
@@ -88,6 +100,7 @@ def gather_all_links(sources):
     return list(all_links)
 
 def parse_vless_link(link):
+    # ... (без изменений)
     try:
         without_proto = link[8:]
         at_index = without_proto.find('@')
@@ -103,7 +116,6 @@ def parse_vless_link(link):
 
         params = parse_qs(parsed.query)
         security = params.get('security', ['none'])[0]
-        # Нормализация опечатки tsl -> tls
         if security == 'tsl':
             security = 'tls'
             logging.debug(f"Нормализовано security: tsl -> tls для {link[:60]}")
@@ -124,13 +136,13 @@ def parse_vless_link(link):
             'path': params.get('path', ['/'])[0],
             'host_header': params.get('host', [host])[0]
         }
-        logging.debug(f"Парсинг ссылки {link[:60]}... -> {config}")
         return config
     except Exception as e:
         logging.debug(f"Ошибка парсинга ссылки {link[:50]}...: {e}")
         return None
 
 def create_xray_config(vless_config):
+    # ... (без изменений)
     config = {
         "log": {"loglevel": "error"},
         "inbounds": [
@@ -198,7 +210,25 @@ def create_xray_config(vless_config):
 
     return config
 
+def check_tcp(link):
+    """Быстрая TCP-проверка: пытается соединиться с хостом:порт."""
+    parsed = parse_vless_link(link)
+    if not parsed:
+        return (link, False)
+    host = parsed['host']
+    port = parsed['port']
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(TCP_CHECK_TIMEOUT)
+        result = sock.connect_ex((host, port))
+        sock.close()
+        return (link, result == 0)
+    except Exception as e:
+        logging.debug(f"TCP ошибка для {link[:60]}: {e}")
+        return (link, False)
+
 def check_vless_real(link):
+    """Реальная проверка через Xray (только для ссылок, прошедших TCP)."""
     vless_config = parse_vless_link(link)
     if not vless_config:
         return (link, False, None)
@@ -262,57 +292,47 @@ def check_vless_real(link):
         if os.path.exists(config_path):
             os.unlink(config_path)
 
-def check_tcp(link):
-    """Быстрая TCP-проверка: пытается соединиться с хостом:порт."""
-    try:
-        parsed = parse_vless_link(link)
-        if not parsed:
-            return (link, False)
-        host = parsed['host']
-        port = parsed['port']
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)
-        result = sock.connect_ex((host, port))
-        sock.close()
-        return (link, result == 0)
-    except Exception as e:
-        logging.debug(f"TCP ошибка для {link[:60]}: {e}")
-        return (link, False)
-
 def filter_working_links(links):
-    # Сначала пробуем реальную проверку
-    logging.info(f"🧪 Запуск РЕАЛЬНОЙ проверки через Xray-core...")
-    working_real = []
+    """Двухэтапная проверка: быстрый TCP, затем реальный для выживших."""
     total = len(links)
-    with ThreadPoolExecutor(max_workers=REAL_CHECK_CONCURRENCY) as executor:
-        future_to_link = {executor.submit(check_vless_real, link): link for link in links}
-        for i, future in enumerate(as_completed(future_to_link), 1):
-            link, is_working, latency = future.result()
-            if is_working:
-                working_real.append(link)
-                logging.info(f"✅ [{i}/{total}] Работает (latency: {latency}ms): {link[:80]}...")
-            else:
-                logging.info(f"❌ [{i}/{total}] Не работает: {link[:80]}...")
 
-    if working_real:
-        return working_real
-
-    # Если ничего не работает, делаем fallback на TCP-проверку
-    logging.warning("⚠️ Реальная проверка не дала результатов. Запускаю TCP-проверку (только открытые порты)...")
-    working_tcp = []
-    with ThreadPoolExecutor(max_workers=50) as executor:
+    # Этап 1: TCP-проверка всех ссылок
+    logging.info(f"🌐 Этап 1: TCP-проверка {total} ссылок (параллельность {TCP_MAX_WORKERS})...")
+    tcp_ok = []
+    with ThreadPoolExecutor(max_workers=TCP_MAX_WORKERS) as executor:
         future_to_link = {executor.submit(check_tcp, link): link for link in links}
         for i, future in enumerate(as_completed(future_to_link), 1):
-            link, is_working = future.result()
-            if is_working:
-                working_tcp.append(link)
+            link, ok = future.result()
+            if ok:
+                tcp_ok.append(link)
                 logging.info(f"✅ TCP OK [{i}/{total}]: {link[:80]}...")
             else:
                 logging.info(f"❌ TCP Failed [{i}/{total}]: {link[:80]}...")
 
-    if working_tcp:
-        logging.info(f"TCP-проверка нашла {len(working_tcp)} ссылок с открытыми портами.")
-    return working_tcp
+    logging.info(f"📊 TCP-проверка завершена. Прошли: {len(tcp_ok)}/{total}")
+
+    if ONLY_TCP:
+        logging.info("⚡ Режим ONLY_TCP: возвращаем результаты TCP-проверки.")
+        return tcp_ok
+
+    if not tcp_ok:
+        logging.warning("⚠️ Нет ссылок, прошедших TCP. Реальная проверка не требуется.")
+        return []
+
+    # Этап 2: реальная проверка только для прошедших TCP
+    logging.info(f"🧪 Этап 2: Реальная проверка {len(tcp_ok)} ссылок через Xray-core (параллельность {REAL_CHECK_CONCURRENCY})...")
+    working_real = []
+    with ThreadPoolExecutor(max_workers=REAL_CHECK_CONCURRENCY) as executor:
+        future_to_link = {executor.submit(check_vless_real, link): link for link in tcp_ok}
+        for i, future in enumerate(as_completed(future_to_link), 1):
+            link, is_working, latency = future.result()
+            if is_working:
+                working_real.append(link)
+                logging.info(f"✅ [{i}/{len(tcp_ok)}] Работает (latency: {latency}ms): {link[:80]}...")
+            else:
+                logging.info(f"❌ [{i}/{len(tcp_ok)}] Не работает: {link[:80]}...")
+
+    return working_real
 
 def save_working_links(links):
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
