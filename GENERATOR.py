@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GENERATOR.py – Оптимизированная проверка Vless серверов (двухэтапная, с ускоренной TCP)
+# GENERATOR.py – Оптимизированная проверка Vless серверов (двухэтапная, порт 8080)
 
 import re
 import socket
@@ -15,8 +15,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 import requests
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Настройка логирования – пока оставим DEBUG для диагностики
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Константы
 SOURCES_FILE = "sources.txt"
@@ -26,26 +26,34 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 XRAY_CORE_PATH = "xray"
 
 # Ускоренная TCP-проверка
-TCP_CHECK_TIMEOUT = 2           # таймаут соединения (сек)
-TCP_MAX_WORKERS = 300            # максимальное количество потоков
+TCP_CHECK_TIMEOUT = 2
+TCP_MAX_WORKERS = 300
 
-# Реальная проверка
+# Реальная проверка – порт изменён на 8080
+SOCKS_PORT = 8080
 REAL_CHECK_TIMEOUT = 15
-REAL_CHECK_CONCURRENCY = 9       # количество одновременных процессов Xray (оптимизировано)
-XRAY_STARTUP_DELAY = 2
-TEST_URL = "http://connectivitycheck.gstatic.com/generate_204"
+REAL_CHECK_CONCURRENCY = 9
+XRAY_STARTUP_DELAY = 3          # увеличено для надёжности
 RETRY_COUNT = 1
+
+# Список тестовых URL (возвращают 204)
+TEST_URLS = [
+    "http://connectivitycheck.gstatic.com/generate_204",
+    "https://connectivitycheck.gstatic.com/generate_204",
+    "http://cp.cloudflare.com/generate_204",
+    "http://www.gstatic.com/generate_204",
+    "http://www.google.com/generate_204"
+]
 
 # Режим работы: True – только TCP (быстро), False – полная проверка
 ONLY_TCP = False
 
 @lru_cache(maxsize=256)
 def resolve_host(host):
-    """Кэширует IP-адрес по имени хоста для ускорения повторных запросов."""
+    """Кэширует IP-адрес по имени хоста."""
     return socket.gethostbyname(host)
 
 def read_sources():
-    """Читает файл sources.txt, игнорирует пустые строки и комментарии."""
     sources = []
     try:
         with open(SOURCES_FILE, 'r', encoding='utf-8') as f:
@@ -59,7 +67,6 @@ def read_sources():
     return sources
 
 def fetch_content(url):
-    """Загружает содержимое по URL."""
     try:
         headers = {'User-Agent': USER_AGENT}
         resp = requests.get(url, timeout=REQUEST_TIMEOUT, headers=headers)
@@ -70,11 +77,9 @@ def fetch_content(url):
         return None
 
 def extract_vless_links_from_text(text):
-    """Извлекает все ссылки vless:// из текста."""
     return re.findall(r'vless://[^\s<>"\']+', text)
 
 def decode_base64_content(encoded):
-    """Декодирует base64, если возможно."""
     try:
         encoded = encoded.strip()
         decoded = base64.b64decode(encoded).decode('utf-8', errors='ignore')
@@ -83,7 +88,6 @@ def decode_base64_content(encoded):
         return encoded
 
 def gather_all_links(sources):
-    """Собирает все уникальные Vless-ссылки из всех источников."""
     all_links = set()
     for src in sources:
         if src.startswith('vless://'):
@@ -108,10 +112,6 @@ def gather_all_links(sources):
     return list(all_links)
 
 def parse_vless_link(link):
-    """
-    Парсит vless:// ссылку и извлекает параметры.
-    Возвращает словарь или None.
-    """
     try:
         without_proto = link[8:]
         at_index = without_proto.find('@')
@@ -131,6 +131,7 @@ def parse_vless_link(link):
         if security == 'tsl':
             security = 'tls'
             logging.debug(f"Нормализовано security: tsl -> tls для {link[:60]}")
+        # Для reality тоже может быть опечатка, но оставим как есть
 
         config = {
             'uuid': uuid,
@@ -148,18 +149,19 @@ def parse_vless_link(link):
             'path': params.get('path', ['/'])[0],
             'host_header': params.get('host', [host])[0]
         }
+        logging.debug(f"Парсинг ссылки {link[:60]}... -> {config}")
         return config
     except Exception as e:
         logging.debug(f"Ошибка парсинга ссылки {link[:50]}...: {e}")
         return None
 
 def create_xray_config(vless_config):
-    """Генерирует JSON конфигурацию для Xray-core."""
+    """Генерирует JSON конфигурацию для Xray-core с портом 8080."""
     config = {
         "log": {"loglevel": "error"},
         "inbounds": [
             {
-                "port": 1080,
+                "port": SOCKS_PORT,          # изменено на 8080
                 "listen": "127.0.0.1",
                 "protocol": "socks",
                 "settings": {
@@ -223,14 +225,12 @@ def create_xray_config(vless_config):
     return config
 
 def check_tcp(link):
-    """Быстрая TCP-проверка с кэшированием DNS."""
     parsed = parse_vless_link(link)
     if not parsed:
         return (link, False)
     host = parsed['host']
     port = parsed['port']
     try:
-        # Используем кэшированный IP
         ip = resolve_host(host)
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(TCP_CHECK_TIMEOUT)
@@ -242,7 +242,6 @@ def check_tcp(link):
         return (link, False)
 
 def check_vless_real(link):
-    """Реальная проверка через Xray (только для ссылок, прошедших TCP)."""
     vless_config = parse_vless_link(link)
     if not vless_config:
         return (link, False, None)
@@ -262,35 +261,46 @@ def check_vless_real(link):
 
         time.sleep(XRAY_STARTUP_DELAY)
 
+        # Проверка, что порт 8080 открыт
+        sock_check = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if sock_check.connect_ex(('127.0.0.1', SOCKS_PORT)) != 0:
+            logging.debug(f"Порт {SOCKS_PORT} не открыт после запуска Xray")
+        sock_check.close()
+
         proxies = {
-            'http': 'socks5h://127.0.0.1:1080',
-            'https': 'socks5h://127.0.0.1:1080'
+            'http': f'socks5h://127.0.0.1:{SOCKS_PORT}',
+            'https': f'socks5h://127.0.0.1:{SOCKS_PORT}'
         }
 
-        for attempt in range(RETRY_COUNT + 1):
-            try:
-                start_time = time.time()
-                response = requests.get(
-                    TEST_URL,
-                    proxies=proxies,
-                    timeout=REAL_CHECK_TIMEOUT,
-                    headers={'User-Agent': USER_AGENT}
-                )
-                latency = int((time.time() - start_time) * 1000)
+        # Перебираем тестовые URL
+        for test_url in TEST_URLS:
+            for attempt in range(RETRY_COUNT + 1):
+                try:
+                    start_time = time.time()
+                    response = requests.get(
+                        test_url,
+                        proxies=proxies,
+                        timeout=REAL_CHECK_TIMEOUT,
+                        headers={'User-Agent': USER_AGENT},
+                        allow_redirects=False
+                    )
+                    latency = int((time.time() - start_time) * 1000)
 
-                if response.status_code == 204:
-                    return (link, True, latency)
-                else:
-                    logging.debug(f"Попытка {attempt+1}: неожиданный статус {response.status_code}")
-            except requests.exceptions.RequestException as e:
-                logging.debug(f"Попытка {attempt+1} не удалась: {e}")
-                time.sleep(1)
+                    if response.status_code == 204:
+                        return (link, True, latency)
+                    else:
+                        logging.debug(f"URL {test_url} вернул {response.status_code}")
+                except requests.exceptions.RequestException as e:
+                    logging.debug(f"Попытка {attempt+1} для {test_url} не удалась: {e}")
+                    time.sleep(1)
 
-        # Если не удалось, читаем stderr Xray для диагностики
+        # Если все попытки провалились, читаем stderr Xray
         if process:
             stdout, stderr = process.communicate(timeout=2)
             if stderr:
-                logging.debug(f"Xray stderr: {stderr[:500]}")
+                logging.info(f"Xray stderr для {link[:60]}: {stderr[:1000]}")
+            else:
+                logging.debug("Xray stderr пуст")
         return (link, False, None)
 
     except Exception as e:
@@ -307,7 +317,6 @@ def check_vless_real(link):
             os.unlink(config_path)
 
 def filter_working_links(links):
-    """Двухэтапная проверка: быстрый TCP, затем реальный для выживших."""
     total = len(links)
 
     # Этап 1: TCP-проверка всех ссылок
@@ -334,7 +343,7 @@ def filter_working_links(links):
         return []
 
     # Этап 2: реальная проверка только для прошедших TCP
-    logging.info(f"🧪 Этап 2: Реальная проверка {len(tcp_ok)} ссылок через Xray-core (параллельность {REAL_CHECK_CONCURRENCY})...")
+    logging.info(f"🧪 Этап 2: Реальная проверка {len(tcp_ok)} ссылок через Xray-core (порт {SOCKS_PORT}, параллельность {REAL_CHECK_CONCURRENCY})...")
     working_real = []
     with ThreadPoolExecutor(max_workers=REAL_CHECK_CONCURRENCY) as executor:
         future_to_link = {executor.submit(check_vless_real, link): link for link in tcp_ok}
@@ -349,14 +358,12 @@ def filter_working_links(links):
     return working_real
 
 def save_working_links(links):
-    """Сохраняет рабочие ссылки в subscription.txt (перезаписывает файл)."""
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         for link in links:
             f.write(link + '\n')
     logging.info(f"💾 Сохранено {len(links)} рабочих ссылок в {OUTPUT_FILE}")
 
 def check_xray_available():
-    """Проверяет доступность Xray-core."""
     try:
         result = subprocess.run([XRAY_CORE_PATH, '--version'], capture_output=True, text=True, timeout=5)
         if result.returncode == 0:
