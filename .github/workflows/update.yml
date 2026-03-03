@@ -3,7 +3,7 @@ name: Generate Subscription
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *'   # каждый день в 00:00 UTC (можешь изменить)
+    - cron: '0 21 * * *'   # 00:00 по Москве (UTC+3)
 
 jobs:
   build:
