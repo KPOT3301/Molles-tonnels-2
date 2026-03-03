@@ -2,86 +2,54 @@ import os
 import requests
 import base64
 import json
-import subprocess
-import stat
 import time
 import socket
 import datetime
+import concurrent.futures
 
 # --- НАСТРОЙКИ ---
 INPUT_FILE = 'links.txt'
 OUTPUT_FILE = 'subscription.txt'
-CHECKER_PATH = "./nodes-checker"
-BATCH_SIZE = 100 
-REPO_API_URL = "https://api.github.com/repos/nndrizhu/nodes-checker/releases/latest"
+BATCH_SIZE = 100
+# Таймаут для проверки сервера (в секундах)
+CHECK_TIMEOUT = 5 
+# Количество потоков для проверки (чем больше, тем быстрее)
+MAX_WORKERS = 50
 
-def get_latest_checker_url():
-    """Автоматически находит актуальную ссылку на amd64 бинарник"""
+def parse_node(link):
+    """Извлекает хост и порт из ссылки"""
     try:
-        print("🔍 Поиск актуальной версии чекера...")
-        response = requests.get(REPO_API_URL, timeout=15)
-        response.raise_for_status()
-        assets = response.json().get('assets', [])
-        for asset in assets:
-            # Ищем файл, в названии которого есть 'linux' и 'amd64'
-            name = asset.get('name', '').lower()
-            if 'linux' in name and 'amd64' in name:
-                return asset.get('browser_download_url')
-        raise Exception("Не удалось найти подходящий файл в релизах репозитория.")
-    except Exception as e:
-        print(f"❌ Ошибка при поиске чекера: {e}")
+        if link.startswith('vless://'):
+            part = link.split('@')[1].split('?')[0].split('#')[0]
+            host_port = part.split(':')
+            return host_port[0], int(host_port[1])
+        if link.startswith('vmess://'):
+            data = json.loads(base64.b64decode(link[8:]).decode('utf-8'))
+            return data.get('add'), int(data.get('port'))
+    except: return None, None
+
+def check_server(link):
+    """Проверяет доступность TCP порта и замеряет задержку"""
+    host, port = parse_node(link)
+    if not host or not port: return None
+    
+    start_time = time.time()
+    try:
+        # Простая проверка открытия TCP порта
+        with socket.create_connection((host, port), timeout=CHECK_TIMEOUT):
+            delay = int((time.time() - start_time) * 1000)
+            return {"link": link, "delay": delay, "host": host}
+    except:
         return None
 
-def download_checker():
-    """Скачивает чекер, используя динамическую ссылку"""
-    if os.path.exists(CHECKER_PATH):
-        os.remove(CHECKER_PATH)
-        
-    url = get_latest_checker_url()
-    if not url:
-        print("❌ Ссылка на чекер не найдена. Остановка.")
-        exit(1)
-        
-    print(f"📥 Загрузка чекера из: {url}")
-    try:
-        r = requests.get(url, stream=True, timeout=30)
-        r.raise_for_status()
-        with open(CHECKER_PATH, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                f.write(chunk)
-        
-        st = os.stat(CHECKER_PATH)
-        os.chmod(CHECKER_PATH, st.st_mode | stat.S_IEXEC)
-        print(f"✅ Чекер успешно подготовлен ({os.path.getsize(CHECKER_PATH) // 1024} KB)")
-    except Exception as e:
-        print(f"❌ Ошибка загрузки: {e}")
-        exit(1)
-
-def parse_host(link):
-    try:
-        if link.startswith('vless://'): 
-            return link.split('@')[1].split(':')[0]
-        if link.startswith('vmess://'): 
-            v_json = json.loads(base64.b64decode(link[8:]).decode('utf-8'))
-            return v_json.get('add')
-    except: return None
-    return None
-
 def get_batch_ip_info(hosts):
-    ips_to_query, host_to_ip = [], {}
-    for h in hosts:
-        try:
-            ip = socket.gethostbyname(h)
-            ips_to_query.append(ip)
-            host_to_ip[h] = ip
-        except: continue
-    if not ips_to_query: return {}
+    """Получает инфо о провайдерах через Batch API"""
+    if not hosts: return {}
     try:
-        unique_ips = list(set(ips_to_query))[:BATCH_SIZE]
+        unique_ips = list(set(hosts))[:100]
         url = "http://ip-api.com/batch?fields=status,query,countryCode,isp,proxy"
         res = requests.post(url, json=unique_ips, timeout=10).json()
-        ip_map = {i['query']: i for i in res if i.get('status') == 'success'}
-        return {h: ip_map[ip] for h, ip in host_to_ip.items() if ip in ip_map}
+        return {i['query']: i for i in res if i.get('status') == 'success'}
     except: return {}
 
 def rename_server(link, info, index):
@@ -102,67 +70,64 @@ def rename_server(link, info, index):
     return link
 
 def main():
-    download_checker()
-    raw_links_dict = {}
+    print(f"🚀 Запуск обновления подписки: {datetime.datetime.now()}")
+    raw_links = {}
+    
+    # 1. Сбор ссылок
     if os.path.exists(INPUT_FILE):
         with open(INPUT_FILE, 'r') as f:
             sources = [l.strip() for l in f if l.strip() and not l.startswith('#')]
         
         for url in sources:
-            print(f"📡 Сбор из: {url}")
+            print(f"📡 Загрузка: {url}")
             try:
                 r = requests.get(url, timeout=15)
                 data = r.text
                 try: data = base64.b64decode(data.strip()).decode('utf-8')
                 except: pass
                 for line in data.splitlines():
-                    clean = line.strip()
-                    if clean.startswith(('vless://', 'vmess://')):
-                        raw_links_dict[clean.split('#')[0]] = clean
+                    l = line.strip()
+                    if l.startswith(('vless://', 'vmess://')):
+                        raw_links[l.split('#')[0]] = l
             except: continue
 
-    if not raw_links_dict:
-        print("🛑 Ссылок не найдено.")
-        return
+    if not raw_links:
+        print("🛑 Ссылок не найдено."); return
 
-    print(f"🚀 Проверка {len(raw_links_dict)} серверов...")
-    with open("temp.txt", "w") as f: 
-        f.write("\n".join(raw_links_dict.values()))
-    
-    res = subprocess.run(
-        [CHECKER_PATH, "-u", "https://www.youtube.com", "-f", "temp.txt", "--format", "json"],
-        capture_output=True, text=True
-    )
-    
-    try:
-        nodes = json.loads(res.stdout)
-        alive = sorted([n for n in nodes if n.get('delay', 0) > 0], key=lambda x: x['delay'])
-    except Exception as e:
-        print(f"❌ Ошибка чекера: {e}")
-        return
+    # 2. Многопоточная проверка
+    print(f"⚡ Проверка {len(raw_links)} серверов в {MAX_WORKERS} потоках...")
+    alive_nodes = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        results = list(executor.map(check_server, raw_links.values()))
+        alive_nodes = [r for r in results if r]
 
-    print(f"🌍 Анализ IP для {len(alive)} серверов...")
+    # Сортировка по задержке
+    alive_nodes.sort(key=lambda x: x['delay'])
+    print(f"✅ Найдено живых серверов: {len(alive_nodes)}")
+
+    # 3. Фильтрация IP и переименование
     final_list = []
     idx = 1
-    for i in range(0, len(alive), BATCH_SIZE):
-        chunk = alive[i:i+BATCH_SIZE]
-        hosts = [parse_host(n['link']) for n in chunk if parse_host(n['link'])]
+    for i in range(0, len(alive_nodes), BATCH_SIZE):
+        chunk = alive_nodes[i:i+BATCH_SIZE]
+        hosts = [n['host'] for n in chunk]
         i_map = get_batch_ip_info(hosts)
+        
         for n in chunk:
-            h = parse_host(n['link'])
-            info = i_map.get(h)
+            info = i_map.get(n['host'])
             if info and "Cloudflare" not in info.get('isp', ''):
                 final_list.append(rename_server(n['link'], info, idx))
                 idx += 1
-        time.sleep(2)
+        time.sleep(1)
 
+    # 4. Сохранение
     if final_list:
-        content = "\n".join(final_list)
+        content = base64.b64encode("\n".join(final_list).encode('utf-8')).decode('utf-8')
         with open(OUTPUT_FILE, "w") as f:
-            f.write(base64.b64encode(content.encode('utf-8')).decode('utf-8'))
-        print(f"✨ Готово! Сохранено: {len(final_list)}")
+            f.write(content)
+        print(f"✨ Готово! Файл {OUTPUT_FILE} обновлен. Серверов: {len(final_list)}")
     else:
-        print("🛑 Рабочих серверов не осталось.")
+        print("🛑 После фильтрации список пуст.")
 
 if __name__ == "__main__":
     main()
