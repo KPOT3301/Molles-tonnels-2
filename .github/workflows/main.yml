@@ -2,8 +2,9 @@ name: Update VPN Subscription
 
 on:
   schedule:
-    - cron: '0 */6 * * *'
-  workflow_dispatch:
+    # 21:00 UTC = 00:00 MSK (один раз в сутки)
+    - cron: '0 21 * * *'
+  workflow_dispatch: # Позволяет запускать вручную кнопкой в любое время
 
 permissions:
   contents: write
@@ -31,11 +32,11 @@ jobs:
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
           git add subscription.txt links_plain.txt
-          git diff --quiet && git diff --staged --quiet || git commit -m "Update nodes $(date +'%d-%m-%Y')"
-          git push
+          # Проверяем изменения, чтобы избежать пустых коммитов
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Daily update MSK $(date -d '+3 hours' +'%d-%m-%Y')" && git push)
 
       - name: Release Latest
-        if: success() && hashFiles('subscription.txt') != ''
+        if: success()
         uses: softprops/action-gh-release@v1
         with:
           files: |
@@ -43,6 +44,6 @@ jobs:
             links_plain.txt
           tag_name: latest
           name: "VPN Subscription Updated"
-          body: "Обновлено: $(date +'%d-%m-%Y %H:%M')"
+          body: "Обновлено (МСК): $(date -d '+3 hours' +'%d-%m-%Y %H:%M')"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
