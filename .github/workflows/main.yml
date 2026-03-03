@@ -4,7 +4,7 @@ on:
   schedule:
     # 21:00 UTC = 00:00 по Москве
     - cron: '0 21 * * *'
-  workflow_dispatch: # Позволяет запускать вручную кнопкой в Actions
+  workflow_dispatch: # Кнопка ручного запуска
 
 permissions:
   contents: write
@@ -25,16 +25,15 @@ jobs:
         run: pip install requests
 
       - name: Run Generator
-        # Запускаем именно GENERATOR.py
+        # ВАЖНО: Мы исправили main.py на GENERATOR.py
         run: python GENERATOR.py
 
-      - name: Commit and Push changes
+      - name: Commit and Push
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add subscription.txt links_plain.txt
           
-          # Проверка на наличие изменений, чтобы не создавать пустые коммиты
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
@@ -42,7 +41,7 @@ jobs:
             git push
           fi
 
-      - name: Update GitHub Release
+      - name: Create Release
         if: success()
         uses: softprops/action-gh-release@v1
         with:
@@ -53,7 +52,6 @@ jobs:
           name: "🇷🇺 КРОТовыеТОННЕЛИ 🇷🇺"
           body: |
             📅 Обновлено (МСК): $(date -d '+3 hours' +'%d-%m-%Y %H:%M')
-            🚀 10% лучших серверов помечены ракетами.
-            🛰 Всего рабочих узлов: $(grep -c "://" subscription.txt || echo "0")
+            🚀 10% самых быстрых серверов помечены ракетами.
           env:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
