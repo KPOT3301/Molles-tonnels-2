@@ -1,105 +1,195 @@
-import argparse
-import os
-import sys
-import time
+import asyncio
+import aiohttp
 import json
-import socket
-import subprocess
-import platform
-import shutil
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
+import time
+from datetime import datetime
 
-DEFAULT_FILE = "sslist.txt"
-DEFAULT_OUTPUT = "checked.txt"
-DEFAULT_THREADS = 5
+SERVERS_FILE = "servers.txt"
+CACHE_FILE = "best_cache.json"
+OUTPUT_FILE = "TOP100.txt"
 
-
-def file_exists(path):
-    return os.path.isfile(path)
-
-
-def parse_proxies(text):
-    lines = []
-    for line in text.splitlines():
-        line = line.strip()
-        if line:
-            lines.append(line)
-    return lines
+MAX_SERVERS = 100
+MIN_SUCCESS_RUNS = 2
+MAX_FAIL_RUNS = 2
+CACHE_MAX_AGE = 3 * 24 * 60 * 60  # 3 days
+DECAY_FACTOR = 0.7
+TIMEOUT = 10
+DOWNLOAD_LIMIT = 5_000_000  # 5MB max per test
+CONCURRENCY = 20
 
 
-def fake_check(proxy):
-    """
-    Упрощённая проверка (чтобы CI не падал).
-    Здесь можешь вставить свою реальную логику.
-    """
-    time.sleep(0.1)
-    return True
+# ==============================
+# LOAD SERVERS
+# ==============================
+
+def load_servers():
+    if not os.path.exists(SERVERS_FILE):
+        return []
+
+    with open(SERVERS_FILE, "r", encoding="utf-8") as f:
+        return [line.strip() for line in f if line.strip()]
 
 
-def run_checker(file_path, threads, output_file):
-    if not file_exists(file_path):
-        print(f"Input file not found: {file_path}")
-        return 0
+# ==============================
+# CACHE
+# ==============================
 
-    with open(file_path, "r", encoding="utf-8") as f:
-        proxies = parse_proxies(f.read())
+def load_cache():
+    if not os.path.exists(CACHE_FILE):
+        return {}
 
-    if not proxies:
-        print("No proxies found.")
-        return 0
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        now = time.time()
+        cleaned = {}
+
+        for item in data.get("servers", []):
+            if now - item.get("last_checked", 0) <= CACHE_MAX_AGE:
+                cleaned[item["url"]] = item
+
+        return cleaned
+
+    except:
+        return {}
+
+
+def save_cache(cache):
+    with open(CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump({"servers": list(cache.values())}, f, indent=2)
+
+
+# ==============================
+# TEST SERVER
+# ==============================
+
+async def test_server(session, url):
+    try:
+        start_time = time.time()
+
+        async with session.get(url, timeout=TIMEOUT) as response:
+            if response.status != 200:
+                return None
+
+            downloaded = 0
+            start_download = time.time()
+
+            async for chunk in response.content.iter_chunked(1024):
+                downloaded += len(chunk)
+                if downloaded >= DOWNLOAD_LIMIT:
+                    break
+
+            end_download = time.time()
+
+        latency = start_download - start_time
+        duration = end_download - start_download
+
+        if duration == 0:
+            return None
+
+        speed_mbps = (downloaded * 8) / duration / 1_000_000
+
+        return {
+            "url": url,
+            "latency": round(latency, 3),
+            "speed": round(speed_mbps, 2)
+        }
+
+    except:
+        return None
+
+
+# ==============================
+# MAIN
+# ==============================
+
+async def main():
+    servers = load_servers()
+    cache = load_cache()
+    now = time.time()
+
+    connector = aiohttp.TCPConnector(limit=CONCURRENCY, ssl=False)
+    timeout = aiohttp.ClientTimeout(total=TIMEOUT)
 
     results = []
 
-    with ThreadPoolExecutor(max_workers=threads) as executor:
-        futures = {executor.submit(fake_check, p): p for p in proxies}
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        tasks = [test_server(session, url) for url in servers]
+        responses = await asyncio.gather(*tasks)
 
-        for future in as_completed(futures):
-            proxy = futures[future]
-            try:
-                if future.result():
-                    results.append(proxy)
-                    print(f"[OK] {proxy}")
-            except Exception:
-                pass
+    for r in responses:
+        if r:
+            results.append(r)
 
-    with open(output_file, "w", encoding="utf-8") as f:
-        for r in results:
-            f.write(r + "\n")
+    tested_urls = {r["url"] for r in results}
 
-    print(f"\nDone. Valid proxies: {len(results)}")
-    return 0
+    # ==========================
+    # UPDATE CACHE
+    # ==========================
 
+    for r in results:
+        url = r["url"]
+        speed = r["speed"]
 
-def main():
-    parser = argparse.ArgumentParser()
+        if url in cache:
+            old = cache[url]
 
-    parser.add_argument(
-        "-f",
-        "--file",
-        default=DEFAULT_FILE,
-        help="Input proxy list file (default: sslist.txt)"
-    )
+            new_score = old["score"] * DECAY_FACTOR + speed * (1 - DECAY_FACTOR)
 
-    parser.add_argument(
-        "-o",
-        "--output",
-        default=DEFAULT_OUTPUT,
-        help="Output file (default: checked.txt)"
-    )
+            cache[url]["score"] = round(new_score, 2)
+            cache[url]["success_runs"] += 1
+            cache[url]["fail_runs"] = 0
+            cache[url]["last_checked"] = now
+            cache[url]["latency"] = r["latency"]
 
-    parser.add_argument(
-        "-t",
-        "--threads",
-        type=int,
-        default=DEFAULT_THREADS,
-        help="Number of threads"
-    )
+        else:
+            cache[url] = {
+                "url": url,
+                "score": speed,
+                "success_runs": 1,
+                "fail_runs": 0,
+                "last_checked": now,
+                "latency": r["latency"]
+            }
 
-    args = parser.parse_args()
+    # Fail handling
+    for url in list(cache.keys()):
+        if url not in tested_urls:
+            cache[url]["fail_runs"] += 1
+            cache[url]["score"] *= 0.8
 
-    exit_code = run_checker(args.file, args.threads, args.output)
-    sys.exit(exit_code)
+            if cache[url]["fail_runs"] >= MAX_FAIL_RUNS:
+                del cache[url]
+
+    # ==========================
+    # FILTER STABLE
+    # ==========================
+
+    stable = [
+        v for v in cache.values()
+        if v["success_runs"] >= MIN_SUCCESS_RUNS
+    ]
+
+    stable.sort(key=lambda x: x["score"], reverse=True)
+    top100 = stable[:MAX_SERVERS]
+
+    # ==========================
+    # SAVE OUTPUT
+    # ==========================
+
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        for i, server in enumerate(top100, 1):
+            name = f"SERVER {str(i).zfill(4)} | UPDATED {datetime.utcnow().strftime('%d-%m-%Y')}"
+            f.write(f"{name}\n")
+            f.write(f"{server['url']}\n")
+            f.write(f"Score: {server['score']} Mbps | Latency: {server['latency']}s\n\n")
+
+    save_cache(cache)
+
+    print(f"Done. Stable servers: {len(top100)}")
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
