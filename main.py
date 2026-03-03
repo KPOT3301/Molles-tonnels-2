@@ -4,7 +4,7 @@ from urllib.parse import quote
 # --- НАСТРОЙКИ ---
 INPUT_FILE = 'links.txt'
 OUTPUT_FILE = 'subscription.txt'
-PLAIN_OUTPUT = 'links_plain.txt' # Добавили явный вывод чистого списка
+PLAIN_OUTPUT = 'links_plain.txt'
 
 def check_node(host, port=443, timeout=2):
     try:
@@ -39,7 +39,7 @@ def get_ip_info(host):
     return {'countryCode': 'UN', 'isp': 'Unknown'}
 
 def main():
-    print(f"🚀 Старт полной очистки: {datetime.datetime.now()}")
+    print(f"🚀 Старт: {datetime.datetime.now()}")
     
     unique_links = {}
     if os.path.exists(INPUT_FILE):
@@ -55,8 +55,7 @@ def main():
                 for line in content.splitlines():
                     raw_line = line.strip()
                     if raw_line.startswith(('vless://', 'vmess://')):
-                        # РАДИКАЛЬНОЕ ОТРЕЗАНИЕ ВСЕГО ПОСЛЕ #
-                        # Это убирает [RU], [AM] и прочее из исходника
+                        # Жесткое отсечение старых имен со скобками
                         clean_link = raw_line.split('#')[0]
                         if clean_link not in unique_links:
                             unique_links[clean_link] = clean_link
@@ -75,15 +74,13 @@ def main():
         
         if host and check_node(host, port):
             info = get_ip_info(host)
-            # Убираем любые скобки из данных API
             country = info.get('countryCode', 'UN').replace('[', '').replace(']', '')
             isp = info.get('isp', 'ISP').split()[0].replace('[', '').replace(']', '').strip(',.')
             
-            # Чистое имя без скобок
+            # Имя строго без скобок
             name_str = f"{country} {isp} | N{str(idx).zfill(4)} | {today}"
             
             if base_link.startswith('vless://'):
-                # Формируем чистую ссылку: база#имя
                 final_configs.append(f"{base_link}#{quote(name_str)}")
             elif base_link.startswith('vmess://'):
                 try:
@@ -97,16 +94,21 @@ def main():
             if idx > 400: break
 
     if final_configs:
-        # 1. Сохраняем links_plain.txt (открытый список)
+        # 1. Сначала записываем текстовый файл (links_plain.txt)
+        plain_content = "\n".join(final_configs)
         with open(PLAIN_OUTPUT, "w", encoding='utf-8') as f:
-            f.write("\n".join(final_configs))
+            f.write(plain_content)
             
-        # 2. Сохраняем subscription.txt (Base64)
-        out_data = base64.b64encode("\n".join(final_configs).encode('utf-8')).decode('utf-8')
+        # 2. Берем данные ПРЯМО из того, что записали в links_plain.txt
+        # и кодируем их для subscription.txt
+        with open(PLAIN_OUTPUT, "r", encoding='utf-8') as f:
+            data_to_encode = f.read()
+            
+        out_data = base64.b64encode(data_to_encode.encode('utf-8')).decode('utf-8')
         with open(OUTPUT_FILE, "w", encoding='utf-8') as f:
             f.write(out_data)
             
-        print(f"✨ Готово! Файлы {OUTPUT_FILE} и {PLAIN_OUTPUT} очищены от скобок.")
+        print(f"✨ Синхронизация завершена. {OUTPUT_FILE} создан на основе {PLAIN_OUTPUT}.")
 
 if __name__ == "__main__":
     main()
