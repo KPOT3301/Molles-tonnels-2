@@ -3,108 +3,155 @@ import requests
 import base64
 import json
 import subprocess
-import stat
-import time
 import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# --- НАСТРОЙКИ ---
-INPUT_FILE = 'links.txt'
-OUTPUT_FILE = 'subscription.txt'
-PLAIN_OUTPUT = 'links_plain.txt'
+INPUT_FILE = "links.txt"
+OUTPUT_FILE = "subscription.txt"
+PLAIN_OUTPUT = "links_plain.txt"
 CHECKER_URL = "https://github.com/nndrizhu/nodes-checker/releases/latest/download/nodes-checker-linux-amd64"
 CHECKER_PATH = "./nodes-checker"
 
+MAX_DELAY = 120
+TOP_LIMIT = 25
+THREADS = 20  # безопасно для GitHub Actions
+
+
+# ---------- Скачать чекер ----------
 def download_checker():
     if not os.path.exists(CHECKER_PATH):
-        print("📥 Загрузка чекера...")
-        r = requests.get(CHECKER_URL, stream=True)
+        r = requests.get(CHECKER_URL)
         with open(CHECKER_PATH, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                f.write(chunk)
+            f.write(r.content)
         os.chmod(CHECKER_PATH, 0o755)
 
+
+# ---------- Переименование ----------
 def rename_server(link, index):
     num = str(index).zfill(4)
     today = datetime.datetime.now().strftime("%d-%m-%Y")
-    # Добавляем эмодзи для красоты в списке
-    status_icon = "🚀" if index <= 3 else "⚡"
-    clean_name = f"{status_icon} SERVER-{num} | {today}"
-    
-    if link.startswith('vless://'):
-        base_part = link.split('#')[0]
-        return f"{base_part}#{clean_name}"
-    elif link.startswith('vmess://'):
+    icon = "🚀" if index <= 3 else "⚡"
+    clean_name = f"{icon} SERVER-{num} | {today}"
+
+    if link.startswith("vless://"):
+        return link.split("#")[0] + "#" + clean_name
+
+    if link.startswith("vmess://"):
         try:
-            v_data = json.loads(base64.b64decode(link[8:]).decode('utf-8'))
-            v_data['ps'] = clean_name
-            return "vmess://" + base64.b64encode(json.dumps(v_data).encode('utf-8')).decode('utf-8')
-        except: return link
+            data = json.loads(base64.b64decode(link[8:]).decode())
+            data["ps"] = clean_name
+            return "vmess://" + base64.b64encode(
+                json.dumps(data).encode()
+            ).decode()
+        except:
+            return link
+
     return link
 
+
+# ---------- Сбор нод ----------
+def collect_nodes():
+    raw = {}
+
+    if not os.path.exists(INPUT_FILE):
+        return raw
+
+    with open(INPUT_FILE) as f:
+        sources = [l.strip() for l in f if l.strip()]
+
+    for url in sources:
+        try:
+            r = requests.get(url, timeout=10)
+            data = r.text.strip()
+            try:
+                data = base64.b64decode(data).decode()
+            except:
+                pass
+
+            for line in data.splitlines():
+                line = line.strip()
+                if line.startswith(("vless://", "vmess://")):
+                    raw[line.split("#")[0]] = line
+        except:
+            continue
+
+    return raw
+
+
+# ---------- Проверка одной ноды ----------
+def check_node(link):
+    try:
+        with open("temp_single.txt", "w") as f:
+            f.write(link)
+
+        res = subprocess.run(
+            [CHECKER_PATH, "-u", "https://www.youtube.com",
+             "-f", "temp_single.txt", "--format", "json"],
+            capture_output=True,
+            text=True,
+            timeout=25
+        )
+
+        data = json.loads(res.stdout)
+        if data and data[0].get("delay", 0) > 0:
+            return {
+                "link": link,
+                "delay": data[0]["delay"]
+            }
+    except:
+        pass
+
+    return None
+
+
+# ---------- Основной запуск ----------
 def main():
     download_checker()
-    raw_links_dict = {}
-    
-    if os.path.exists(INPUT_FILE):
-        with open(INPUT_FILE, 'r') as f:
-            sources = [l.strip() for l in f if l.strip()]
-        
-        for url in sources:
-            try:
-                r = requests.get(url, timeout=10)
-                data = r.text
-                try: data = base64.b64decode(data.strip()).decode('utf-8')
-                except: pass
-                for line in data.splitlines():
-                    line = line.strip()
-                    if line.startswith(('vless://', 'vmess://')):
-                        key = line.split('#')[0]
-                        raw_links_dict[key] = line
-            except: continue
+    nodes = collect_nodes()
 
-    if not raw_links_dict: return
+    if not nodes:
+        return
 
-    # Записываем сырые ссылки
-    with open(PLAIN_OUTPUT, "w", encoding='utf-8') as f:
-        f.write("\n".join(raw_links_dict.values()) + "\n")
+    # сохраняем сырой список
+    with open(PLAIN_OUTPUT, "w", encoding="utf-8") as f:
+        f.write("\n".join(nodes.values()))
 
-    # Проверка
-    with open("temp.txt", "w", encoding='utf-8') as f:
-        f.write("\n".join(raw_links_dict.values()))
+    results = []
 
-    try:
-        res = subprocess.run(
-            [CHECKER_PATH, "-u", "https://www.youtube.com", "-f", "temp.txt", "--format", "json"],
-            capture_output=True, text=True, check=True
-        )
-        checked_data = json.loads(res.stdout)
-    except:
-        checked_data = [{"link": l, "delay": 100} for l in raw_links_dict.values()]
+    # ПАРАЛЛЕЛЬНАЯ ПРОВЕРКА
+    with ThreadPoolExecutor(max_workers=THREADS) as executor:
+        futures = {executor.submit(check_node, link): link
+                   for link in nodes.values()}
 
-    alive = sorted([n for n in checked_data if n.get('delay', 0) > 0], key=lambda x: x['delay'])
+        for future in as_completed(futures):
+            result = future.result()
+            if result and result["delay"] <= MAX_DELAY:
+                results.append(result)
 
-    # --- ФОРМИРОВАНИЕ КРАСИВОГО ФАЙЛА ---
-    today_full = datetime.datetime.now().strftime("%d-%m-%Y %H:%M")
-    server_count = len(alive)
-    
+    if not results:
+        return
+
+    # Рейтинг
+    for node in results:
+        node["score"] = 1000 / node["delay"]
+
+    results = sorted(results, key=lambda x: x["score"], reverse=True)
+    results = results[:TOP_LIMIT]
+
+    # Заголовок
+    today = datetime.datetime.now().strftime("%d-%m-%Y %H:%M")
     header = [
-        f"#profile-title: 🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
-        f"#subscription-userinfo: upload=0; download=0; total=0; expire=0",
-        f"#profile-update-interval: 1",
-        f"#support-url: 🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
-        f"#profile-web-page-url: 🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
-        f"#announce: 🛰 Всего серверов: {server_count} | Обновлено: {today_full} 🇷🇺",
-        "" # Пустая строка перед ключами
+        "#profile-title: 🚀 PREMIUM TUNNELS",
+        "#profile-update-interval: 1",
+        f"#announce: ⚡ Servers: {len(results)} | Updated: {today}",
+        ""
     ]
 
-    if alive:
-        with open(OUTPUT_FILE, "w", encoding='utf-8') as f:
-            # Записываем заголовок
-            f.write("\n".join(header) + "\n")
-            # Записываем ключи
-            for i, node in enumerate(alive, 1):
-                f.write(rename_server(node['link'], i) + "\n")
-        print(f"✅ Подписка оформлена! Серверов: {server_count}")
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        f.write("\n".join(header) + "\n")
+        for i, node in enumerate(results, 1):
+            f.write(rename_server(node["link"], i) + "\n")
+
 
 if __name__ == "__main__":
     main()
