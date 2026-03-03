@@ -9,16 +9,16 @@ import socket
 import datetime
 
 # --- НАСТРОЙКИ ---
-INPUT_FILE = 'links.txt'         # Файл со ссылками на источники
-OUTPUT_FILE = 'subscription.txt' # Итоговая подписка (ТЕКСТ)
-PLAIN_OUTPUT = 'links_plain.txt' # Список уникальных ссылок без мусора
+INPUT_FILE = 'links.txt'         # Файл с источниками
+OUTPUT_FILE = 'subscription.txt' # Итоговая подписка (ТЕКСТОВЫЙ ФАЙЛ)
+PLAIN_OUTPUT = 'links_plain.txt' # Список уникальных сырых ссылок
 CHECKER_URL = "https://github.com/nndrizhu/nodes-checker/releases/latest/download/nodes-checker-linux-amd64"
 CHECKER_PATH = "./nodes-checker"
 
 def download_checker():
-    """Скачивает бинарный файл чекера для Linux x64 (GitHub Actions)."""
+    """Скачивает чекер для Linux x64."""
     if not os.path.exists(CHECKER_PATH):
-        print("📥 Загрузка чекера (Linux amd64)...")
+        print("📥 Загрузка чекера...")
         r = requests.get(CHECKER_URL, stream=True)
         with open(CHECKER_PATH, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
@@ -28,7 +28,7 @@ def download_checker():
 
 def rename_server(link, index):
     """
-    Дает серверу максимально простое имя. 
+    Дает серверу простое имя для Happ.
     Формат: SERVER-0001-UPDATED-03-03-2026
     """
     num = str(index).zfill(4)
@@ -36,15 +36,18 @@ def rename_server(link, index):
     clean_name = f"SERVER-{num}-UPDATED-{today}"
     
     if link.startswith('vless://'):
-        # Отрезаем старое имя после # и ставим новое простое
+        # Отрезаем всё после # и ставим новое имя
         base_part = link.split('#')[0]
         return f"{base_part}#{clean_name}"
     
     elif link.startswith('vmess://'):
         try:
+            # Декодируем только для того, чтобы изменить имя (ps)
             v_data = json.loads(base64.b64decode(link[8:]).decode('utf-8'))
             v_data['ps'] = clean_name
-            return "vmess://" + base64.b64encode(json.dumps(v_data).encode('utf-8')).decode('utf-8')
+            # Кодируем обратно ВНУТРЕННИЙ JSON (это стандарт протокола vmess)
+            inner_json = json.dumps(v_data).encode('utf-8')
+            return "vmess://" + base64.b64encode(inner_json).decode('utf-8')
         except:
             return link
     return link
@@ -54,17 +57,16 @@ def main():
     
     raw_links_dict = {}
     
-    # 1. СБОР И ДЕДУПЛИКАЦИЯ (Очистка от мусора)
+    # 1. СБОР И ДЕДУПЛИКАЦИЯ
     if os.path.exists(INPUT_FILE):
         with open(INPUT_FILE, 'r') as f:
             sources = [l.strip() for l in f if l.strip()]
         
-        print(f"📡 Загрузка ссылок из {len(sources)} источников...")
         for url in sources:
             try:
                 r = requests.get(url, timeout=10)
                 data = r.text
-                # Если источник в Base64, декодируем
+                # Декодируем источник, если он в Base64
                 try: 
                     data = base64.b64decode(data.strip()).decode('utf-8')
                 except: 
@@ -73,7 +75,6 @@ def main():
                 for line in data.splitlines():
                     line = line.strip()
                     if line.startswith(('vless://', 'vmess://')):
-                        # Ключ для уникальности — сама ссылка без названия
                         key = line.split('#')[0]
                         if key not in raw_links_dict:
                             raw_links_dict[key] = line
@@ -84,16 +85,14 @@ def main():
         print("🛑 Ссылок не найдено.")
         return
 
-    # Перезаписываем links_plain.txt (чистый список оригинальных ссылок)
+    # Записываем чистый список уникальных сырых ссылок
     with open(PLAIN_OUTPUT, "w", encoding='utf-8') as f:
         f.write("\n".join(raw_links_dict.values()))
-    print(f"📄 Файл {PLAIN_OUTPUT} обновлен.")
 
     # 2. ПРОВЕРКА ЧЕРЕЗ ЧЕКЕР
     with open("temp.txt", "w", encoding='utf-8') as f:
         f.write("\n".join(raw_links_dict.values()))
 
-    print("🚀 Проверка через чекер (YouTube)...")
     try:
         res = subprocess.run(
             [CHECKER_PATH, "-u", "https://www.youtube.com", "-f", "temp.txt", "--format", "json"],
@@ -104,7 +103,7 @@ def main():
         print(f"❌ Ошибка чекера: {e}")
         return
 
-    # Фильтруем живые и сортируем по скорости (delay)
+    # Фильтруем живые и сортируем по скорости
     alive_nodes = sorted(
         [n for n in checked_data if n.get('delay', 0) > 0], 
         key=lambda x: x['delay']
@@ -115,16 +114,18 @@ def main():
     for idx, node in enumerate(alive_nodes, start=1):
         final_links.append(rename_server(node['link'], idx))
 
-    # 4. СОХРАНЕНИЕ В ТЕКСТ (БЕЗ BASE64)
+    # 4. СОХРАНЕНИЕ В ТЕКСТ (ЖЕСТКАЯ ПЕРЕЗАПИСЬ БЕЗ BASE64)
     if final_links:
-        with open(OUTPUT_FILE, "w", encoding='utf-8') as f:
-            f.write("\n".join(final_links))
+        # Объединяем ссылки просто через перенос строки
+        result_text = "\n".join(final_links)
         
-        print("-" * 30)
-        print(f"✨ ПОДПИСКА ГОТОВА (ТЕКСТОВЫЙ ФОРМАТ)")
-        print(f"📊 Рабочих серверов: {len(final_links)}")
-        print(f"🔝 Лучший пинг: {alive_nodes[0]['delay']}ms")
-        print("-" * 30)
+        with open(OUTPUT_FILE, "w", encoding='utf-8') as f:
+            f.write(result_text)
+            f.flush() # Принудительно сбрасываем буфер на диск
+            os.fsync(f.fileno()) # Гарантируем запись
+            
+        print(f"✅ Файл {OUTPUT_FILE} перезаписан как ОБЫЧНЫЙ ТЕКСТ.")
+        print(f"📊 Всего рабочих серверов: {len(final_links)}")
     else:
         print("🛑 Рабочих серверов не найдено.")
 
