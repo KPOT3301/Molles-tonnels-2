@@ -5,7 +5,7 @@ INPUT_FILE = 'links.txt'
 OUTPUT_FILE = 'subscription.txt'
 
 def check_node(host, port=443, timeout=2):
-    """Быстрая проверка доступности порта по TCP"""
+    """Быстрая проверка доступности порта"""
     try:
         socket.setdefaulttimeout(timeout)
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -31,11 +31,11 @@ def parse_node_info(link):
         return None, None
 
 def main():
-    print(f"🚀 Start update: {datetime.datetime.now()}")
+    print(f"🚀 Start: {datetime.datetime.now()}")
     
     unique_links = {}
     if os.path.exists(INPUT_FILE):
-        with open(INPUT_FILE, 'r') as f:
+        with open(INPUT_FILE, 'r', encoding='utf-8') as f:
             sources = [l.strip() for l in f if l.strip() and not l.startswith('#')]
         
         for url in sources:
@@ -48,51 +48,53 @@ def main():
                     pass
                 
                 for line in content.splitlines():
-                    if line.strip().startswith(('vless://', 'vmess://')):
-                        # Дедупликация: сравниваем только тело ссылки без имени
-                        clean_link = line.strip().split('#')[0]
-                        if clean_link not in unique_links:
-                            unique_links[clean_link] = line.strip()
+                    link = line.strip()
+                    if link.startswith(('vless://', 'vmess://')):
+                        # Ключевое изменение: ВСЕГДА берем только часть ДО знака #
+                        # Это полностью удаляет старое имя (например, [AM] Host)
+                        base_link = link.split('#')[0]
+                        if base_link not in unique_links:
+                            unique_links[base_link] = base_link
             except: 
                 continue
 
     if not unique_links:
-        print("❌ No links found"); return
+        print("❌ Ссылки не найдены"); return
 
-    print(f"🔍 Checking {len(unique_links)} nodes...")
+    print(f"🔍 Проверка {len(unique_links)} серверов...")
     final_configs = []
     idx = 1
     today = datetime.datetime.now().strftime("%d-%m-%Y")
 
-    for base_link, full_link in unique_links.items():
-        host, port = parse_node_info(full_link)
+    for base_link in unique_links.keys():
+        host, port = parse_node_info(base_link)
         
         if host and check_node(host, port):
-            # МАКСИМАЛЬНО БЕЗОПАСНОЕ ИМЯ: №0001 | 03-03-2026
-            name = f"N{str(idx).zfill(4)} | {today}"
+            # НОВОЕ ИМЯ: СТРОГО №0001 | 03-03-2026
+            name = f"№{str(idx).zfill(4)} | {today}"
             
-            if full_link.startswith('vless://'):
-                # Приклеиваем имя после # к нетронутому телу ссылки
+            if base_link.startswith('vless://'):
+                # Склеиваем чистую базу и новое имя
                 final_configs.append(f"{base_link}#{name}")
-            else: # vmess
+            elif base_link.startswith('vmess://'):
                 try:
-                    data = json.loads(base64.b64decode(full_link[8:]).decode('utf-8'))
-                    data['ps'] = name # Обновляем поле PS внутри JSON
+                    data = json.loads(base64.b64decode(base_link[8:]).decode('utf-8'))
+                    data['ps'] = name
                     final_configs.append("vmess://" + base64.b64encode(json.dumps(data).encode('utf-8')).decode('utf-8'))
                 except: 
                     continue
             
             idx += 1
-            if idx > 300: break # Лимит для стабильности подписки
+            if idx > 500: break
 
     if final_configs:
-        # Упаковываем весь список в Base64 для подписки
+        # Сохраняем результат
         out_data = base64.b64encode("\n".join(final_configs).encode('utf-8')).decode('utf-8')
-        with open(OUTPUT_FILE, "w") as f:
+        with open(OUTPUT_FILE, "w", encoding='utf-8') as f:
             f.write(out_data)
-        print(f"✨ Success! Saved {len(final_configs)} nodes.")
+        print(f"✨ Готово! Сохранено серверов: {len(final_configs)}")
     else:
-        print("🛑 No working nodes found.")
+        print("🛑 Рабочих серверов не найдено.")
 
 if __name__ == "__main__":
     main()
