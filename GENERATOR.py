@@ -2,7 +2,6 @@ import asyncio
 import base64
 import json
 import os
-import re
 import subprocess
 import tempfile
 import time
@@ -162,7 +161,7 @@ def xray_check(link):
         return False
 
 
-# ================= MAIN CHECK =================
+# ================= FULL CHECK =================
 async def check_vless(link):
     try:
         data = parse_vless(link)
@@ -172,7 +171,7 @@ async def check_vless(link):
         if not tcp_ok:
             return False
 
-        # Real Xray test
+        # Xray real test
         return xray_check(link)
 
     except:
@@ -213,7 +212,7 @@ def write_files(alive):
 
 # ================= ENTRY =================
 async def main():
-    with open("input.txt", "r", encoding="utf-8") as f:
+    with open("sslist.txt", "r", encoding="utf-8") as f:
         links = [l.strip() for l in f if l.startswith("vless://")]
 
     alive = await process_links(links)
