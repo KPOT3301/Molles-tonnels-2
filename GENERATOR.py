@@ -12,16 +12,14 @@ SS_LIST_FILE = "sslist.txt"
 OUTPUT_TEXT = "Molestunnels.txt"
 OUTPUT_BASE64 = "Molestunnels_base64.txt"
 
-TIMEOUT = 6
-CONCURRENCY = 100
-RETRY_COUNT = 3
-MAX_LATENCY = 2.5  # максимум 2.5 секунды
-
-BAD_PORTS = {80, 8080, 8880}
+TIMEOUT = 8
+CONCURRENCY = 20
+RETRY_COUNT = 2
+MAX_LATENCY = 8  # мягкий фильтр для GitHub
 
 STATIC_LINES = [
-"#profile-title:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
-"#profile-update-interval: 1",
+    "#profile-title:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
+    "#profile-update-interval: 1",
 ]
 
 # ================= ЗАГРУЗКА =================
@@ -61,8 +59,7 @@ def parse_vless(key):
         host_port = part.split("?")[0]
         host, port = host_port.split(":")
         tls = "security=tls" in key
-        ws = "type=ws" in key
-        return host, int(port), tls, ws
+        return host, int(port), tls
     except:
         return None
 
@@ -75,8 +72,7 @@ def parse_vmess(key):
         host = data.get("add")
         port = int(data.get("port"))
         tls = data.get("tls") == "tls"
-        ws = data.get("net") == "ws"
-        return host, port, tls, ws
+        return host, port, tls
     except:
         return None
 
@@ -89,11 +85,12 @@ def parse_key(key):
     return None
 
 
-# ================= ПРОВЕРКИ =================
+# ================= TCP ПРОВЕРКА =================
 
 async def tcp_check(host, port, use_tls):
     try:
         ssl_context = None
+
         if use_tls:
             ssl_context = ssl.create_default_context()
             ssl_context.check_hostname = False
@@ -117,27 +114,14 @@ async def tcp_check(host, port, use_tls):
         return False, None
 
 
-async def ws_check(host, port, use_tls):
-    scheme = "wss" if use_tls else "ws"
-    url = f"{scheme}://{host}:{port}/"
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.ws_connect(url, timeout=TIMEOUT):
-                return True
-    except:
-        return False
-
+# ================= ВАЛИДАЦИЯ =================
 
 async def validate(key):
     parsed = parse_key(key)
     if not parsed:
         return None
 
-    host, port, use_tls, use_ws = parsed
-
-    if port in BAD_PORTS:
-        return None
+    host, port, use_tls = parsed
 
     success = 0
     best_latency = 999
@@ -148,17 +132,13 @@ async def validate(key):
             success += 1
             best_latency = min(best_latency, latency)
 
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.5)
 
-    if success < 2:
+    if success == 0:
         return None
 
     if best_latency > MAX_LATENCY:
         return None
-
-    if use_ws:
-        if not await ws_check(host, port, use_tls):
-            return None
 
     return key, best_latency
 
@@ -198,7 +178,6 @@ async def main():
 
     valid = [r for r in results if r]
 
-    # сортировка по пингу
     valid.sort(key=lambda x: x[1])
 
     today = datetime.now().strftime("%d-%m-%Y")
@@ -223,6 +202,7 @@ async def main():
         f.write(final_text)
 
     encoded = base64.b64encode(final_text.encode()).decode()
+
     with open(OUTPUT_BASE64, "w", encoding="utf-8") as f:
         f.write(encoded)
 
@@ -231,4 +211,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
