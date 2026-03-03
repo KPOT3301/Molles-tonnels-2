@@ -1,1 +1,20 @@
-https://xray.abvpn.ru/vless/23e71eaf-e035-4064-a101-36323927d5a5/1049575548.json#abvpn
+# лайм
+https://raw.githubusercontent.com/LimeHi/LimeVPN/refs/heads/main/LimeVPN.txt?v=1
+#LimeVPNPaser
+https://raw.githubusercontent.com/LimeHi/LimeVPNGenerator/main/Keys.txt?v=1
+# ZipVPN
+https://raw.githubusercontent.com/zipvpn/FreeVPNNodes/refs/heads/main/free_v2ray_xray_nodes.txt
+# 🔴 BLACKLIST
+https://raw.githubusercontent.com/55prosek-lgtm/vpn_config_for_russia/refs/heads/main/blacklist.txt
+# BLACK VLESS (RUS)
+https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt
+# ConfigForge V2Ray
+https://raw.githubusercontent.com/ShatakVPN/ConfigForge-V2Ray/main/configs/ru/all.txt
+# vpn-configs-for-russia
+https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt
+# против блокировок
+https://raw.githubusercontent.com/cinev505/VlessTrogan-vpn-key/refs/heads/main/All-keys
+# kfwl
+https://gist.githubusercontent.com/sevushyamamoto-stack/9341be7a058e132154d407d082a60fb1/raw/mysub.txt
+# HAPP
+https://raw.githubusercontent.com/EvenSide/Vless/refs/heads/main/Blacklist.txt
