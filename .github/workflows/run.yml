@@ -2,7 +2,7 @@ name: Check Vless Servers
 
 on:
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: '0 21 * * *'   # 21:00 UTC = 00:00 MSK (следующего дня)
   workflow_dispatch:
 
 jobs:
