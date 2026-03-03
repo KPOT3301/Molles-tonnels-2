@@ -1,202 +1,223 @@
 import asyncio
-import aiohttp
 import base64
-import socket
+import json
+import os
 import re
+import subprocess
+import tempfile
 import time
-from urllib.parse import urlparse
 from datetime import datetime
+from urllib.parse import urlparse, parse_qs
 from zoneinfo import ZoneInfo
 
-INPUT_FILE = "sslist.txt"
-OUTPUT_FILE = "Molestunnels.txt"
-BASE64_FILE = "Molestunnels_base64.txt"
-
-CONCURRENCY = 300
-TIMEOUT = 1.5
-
-PROFILE_TITLE = "🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
+TIMEOUT = 5
+XRAY_PATH = "./xray"
+TEST_URL = "https://www.google.com"
 
 
-# -------------------- EXTRACT VLESS --------------------
-
-def extract_vless(text):
-    return list(set(re.findall(r'vless://[^\s]+', text)))
-
-
-# -------------------- COUNTRY FLAG --------------------
-
-def country_to_flag(code):
-    if not code or len(code) != 2:
-        return "🌍"
-    return chr(ord(code[0].upper()) + 127397) + chr(ord(code[1].upper()) + 127397)
-
-
-async def fetch_country(session, ip):
+# ================= TCP CHECK =================
+async def tcp_check(host, port):
     try:
-        url = f"http://ip-api.com/json/{ip}?fields=countryCode"
-        async with session.get(url, timeout=2) as resp:
-            data = await resp.json()
-            return country_to_flag(data.get("countryCode"))
-    except:
-        return "🌍"
-
-
-# -------------------- FETCH SOURCES --------------------
-
-async def fetch(session, url):
-    try:
-        async with session.get(url, timeout=TIMEOUT) as response:
-            return await response.text()
-    except:
-        return ""
-
-
-# -------------------- TCP CHECK WITH LATENCY --------------------
-
-async def check_once(host, port):
-    try:
-        start = time.perf_counter()
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port),
-            timeout=TIMEOUT
+            asyncio.open_connection(host, port), timeout=TIMEOUT
         )
-        latency = (time.perf_counter() - start) * 1000
         writer.close()
         await writer.wait_closed()
-        return latency
+        return True
     except:
-        return None
+        return False
 
 
-# -------------------- SERVER CHECK --------------------
+# ================= VLESS PARSER =================
+def parse_vless(link):
+    parsed = urlparse(link)
+    uuid = parsed.username
+    host = parsed.hostname
+    port = parsed.port
+    params = parse_qs(parsed.query)
 
-async def check_server(config, semaphore, session):
-    try:
-        parsed = urlparse(config)
-        host = parsed.hostname
-        port = parsed.port
+    def get_param(key, default=None):
+        return params.get(key, [default])[0]
 
-        if not host or not port:
-            return None
+    return {
+        "uuid": uuid,
+        "host": host,
+        "port": port,
+        "type": get_param("type", "tcp"),
+        "security": get_param("security", "none"),
+        "sni": get_param("sni"),
+        "path": get_param("path", ""),
+        "host_header": get_param("host"),
+        "serviceName": get_param("serviceName"),
+        "flow": get_param("flow"),
+        "pbk": get_param("pbk"),
+        "sid": get_param("sid"),
+    }
 
-        async with semaphore:
 
-            first = await check_once(host, port)
-            if first is None:
-                return None
+# ================= XRAY CONFIG BUILDER =================
+def build_config(data):
+    stream_settings = {
+        "network": data["type"],
+        "security": data["security"],
+    }
 
-            await asyncio.sleep(0.3)
+    # TLS
+    if data["security"] == "tls":
+        stream_settings["tlsSettings"] = {
+            "serverName": data["sni"] or data["host"]
+        }
 
-            second = await check_once(host, port)
-            if second is None:
-                return None
+    # Reality
+    if data["security"] == "reality":
+        stream_settings["realitySettings"] = {
+            "serverName": data["sni"],
+            "publicKey": data["pbk"],
+            "shortId": data["sid"] or "",
+        }
 
-            avg_latency = (first + second) / 2
+    # WS
+    if data["type"] == "ws":
+        stream_settings["wsSettings"] = {
+            "path": data["path"],
+            "headers": {"Host": data["host_header"]} if data["host_header"] else {},
+        }
 
-            ip = host
-            try:
-                ip = socket.gethostbyname(host)
-            except:
-                pass
+    # gRPC
+    if data["type"] == "grpc":
+        stream_settings["grpcSettings"] = {
+            "serviceName": data["serviceName"]
+        }
 
-            flag = await fetch_country(session, ip)
+    outbound = {
+        "protocol": "vless",
+        "settings": {
+            "vnext": [
+                {
+                    "address": data["host"],
+                    "port": int(data["port"]),
+                    "users": [
+                        {
+                            "id": data["uuid"],
+                            "encryption": "none",
+                            "flow": data["flow"],
+                        }
+                    ],
+                }
+            ]
+        },
+        "streamSettings": stream_settings,
+    }
 
-            clean_config = config.split("#")[0]
-
-            return {
-                "config": clean_config,
-                "latency": avg_latency,
-                "flag": flag
+    return {
+        "inbounds": [
+            {
+                "port": 10808,
+                "listen": "127.0.0.1",
+                "protocol": "socks",
+                "settings": {"udp": False},
             }
+        ],
+        "outbounds": [outbound],
+    }
 
-    except:
-        return None
 
-
-# -------------------- MAIN --------------------
-
-async def main():
-    print("Reading sources...")
-
+# ================= XRAY CHECK =================
+def xray_check(link):
     try:
-        with open(INPUT_FILE, "r", encoding="utf-8") as f:
-            sources = [line.strip() for line in f if line.strip()]
-    except:
-        print("No sslist.txt found.")
-        return
+        data = parse_vless(link)
+        config = build_config(data)
 
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as tmp:
+            tmp.write(json.dumps(config).encode())
+            tmp_path = tmp.name
+
+        proc = subprocess.Popen(
+            [XRAY_PATH, "-config", tmp_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        time.sleep(2)
+
+        result = subprocess.run(
+            [
+                "curl",
+                "--socks5",
+                "127.0.0.1:10808",
+                "-m",
+                "8",
+                TEST_URL,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        proc.kill()
+        os.remove(tmp_path)
+
+        return result.returncode == 0
+
+    except:
+        return False
+
+
+# ================= MAIN CHECK =================
+async def check_vless(link):
+    try:
+        data = parse_vless(link)
+
+        # TCP first
+        tcp_ok = await tcp_check(data["host"], data["port"])
+        if not tcp_ok:
+            return False
+
+        # Real Xray test
+        return xray_check(link)
+
+    except:
+        return False
+
+
+async def process_links(links):
+    alive = []
+    tasks = [check_vless(link) for link in links]
+    results = await asyncio.gather(*tasks)
+
+    for link, ok in zip(links, results):
+        if ok:
+            alive.append(link)
+
+    return alive
+
+
+# ================= FILE WRITE =================
+def write_files(alive):
     moscow_time = datetime.now(ZoneInfo("Europe/Moscow"))
     update_date = moscow_time.strftime("%d-%m-%Y")
 
-    async with aiohttp.ClientSession() as session:
+    announce = f"#announce: 🚀 РАБОЧИХ {len(alive)} | 📅 {update_date}"
 
-        tasks = [fetch(session, url) for url in sources]
-        results = await asyncio.gather(*tasks)
+    with open("Molestunnels.txt", "w", encoding="utf-8") as f:
+        f.write(announce + "\n")
+        for link in alive:
+            f.write(link + "\n")
 
-        print("Extracting VLESS configs...")
+    encoded = base64.b64encode(
+        ("\n".join([announce] + alive)).encode()
+    ).decode()
 
-        all_configs = []
-        for text in results:
-            all_configs.extend(extract_vless(text))
+    with open("Molestunnels_base64.txt", "w", encoding="utf-8") as f:
+        f.write(encoded)
 
-        all_configs = list(set(all_configs))
 
-        print(f"Total unique VLESS configs: {len(all_configs)}")
+# ================= ENTRY =================
+async def main():
+    with open("input.txt", "r", encoding="utf-8") as f:
+        links = [l.strip() for l in f if l.startswith("vless://")]
 
-        semaphore = asyncio.Semaphore(CONCURRENCY)
-
-        print("Checking servers (with latency)...")
-
-        tasks = [
-            check_server(cfg, semaphore, session)
-            for cfg in all_configs
-        ]
-
-        checked = await asyncio.gather(*tasks)
-
-    alive = [c for c in checked if c is not None]
-
-    if not alive:
-        print("WARNING: No alive configs found!")
-        return
-
-    # Сортировка по скорости (без ограничения количества)
-    alive.sort(key=lambda x: x["latency"])
-
-    print(f"Total alive servers: {len(alive)}")
-
-    formatted = []
-
-    for idx, item in enumerate(alive, start=1):
-        formatted.append(
-            f'{item["config"]}#{item["flag"]} СЕРВЕР {idx:03d} | ОБНОВЛЕН {update_date}'
-        )
-
-    # -------------------- HEADERS --------------------
-
-    HEADERS = [
-        f"#profile-title:{PROFILE_TITLE}",
-        "#subscription-userinfo: upload=0; download=0; total=0; expire=0",
-        "#profile-update-interval: 1",
-        f"#support-url:{PROFILE_TITLE}",
-        f"#profile-web-page-url:{PROFILE_TITLE}",
-        f"#announce: 🚀 РАБОЧИХ {len(alive)} | 📅 {update_date}"
-    ]
-
-    print("Writing files...")
-
-    final_text = "\n".join(HEADERS + formatted)
-
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write(final_text)
-
-    base64_data = base64.b64encode(final_text.encode()).decode()
-
-    with open(BASE64_FILE, "w", encoding="utf-8") as f:
-        f.write(base64_data)
-
-    print("Done.")
+    alive = await process_links(links)
+    write_files(alive)
 
 
 if __name__ == "__main__":
