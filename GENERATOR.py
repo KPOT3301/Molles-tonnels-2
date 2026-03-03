@@ -11,7 +11,7 @@ OUTPUT_FILE = 'subscription.txt'
 PLAIN_OUTPUT = 'links_plain.txt'
 CHECKER_URL = "https://github.com/nndrizhu/nodes-checker/releases/latest/download/nodes-checker-linux-amd64"
 CHECKER_PATH = "./nodes-checker"
-MIN_SPEED_MBPS = 5.0  # Порог отбора (5 Мбит/с)
+MIN_SPEED_MBPS = 2.0  # Снизили порог до 2 Мбит/с для большего количества серверов
 
 def download_checker():
     """Загружает бинарный файл чекера, если его нет"""
@@ -29,7 +29,7 @@ def download_checker():
             print(f"❌ Ошибка загрузки чекера: {e}")
 
 def main():
-    # ШАГ 0: Создаем пустые файлы, чтобы GitHub Actions не выдавал ошибку, если список будет пуст
+    # ШАГ 0: Принудительно создаем пустые файлы перед работой
     for f_path in [OUTPUT_FILE, PLAIN_OUTPUT]:
         with open(f_path, "w", encoding='utf-8') as f:
             f.write("")
@@ -38,7 +38,7 @@ def main():
     
     raw_links = set()
     
-    # ШАГ 1: Сбор ссылок из источников
+    # ШАГ 1: Сбор ссылок из источников в links.txt
     if os.path.exists(INPUT_FILE):
         with open(INPUT_FILE, 'r') as f:
             sources = [line.strip() for line in f if line.strip()]
@@ -48,7 +48,6 @@ def main():
             try:
                 r = requests.get(url, timeout=15)
                 data = r.text
-                # Если контент в Base64 (стандарт подписок), декодируем
                 try: 
                     data = base64.b64decode(data.strip()).decode('utf-8')
                 except: 
@@ -62,47 +61,44 @@ def main():
                 print(f"⚠️ Ошибка доступа к источнику {url}: {e}")
 
     if not raw_links:
-        print("❌ Новых ссылок не найдено.")
+        print("❌ Новых ссылок не найдено. Проверьте содержимое links.txt.")
         return
 
-    # Записываем все ссылки во временный файл для проверки
+    # Сохраняем все найденное во временный файл
     with open("temp.txt", "w", encoding='utf-8') as f:
         f.write("\n".join(raw_links))
 
-    # ШАГ 2: Запуск тестирования скорости
+    # ШАГ 2: Тестирование скорости
     print(f"🔎 Тестируем {len(raw_links)} серверов (порог {MIN_SPEED_MBPS} Mbps)...")
     try:
-        # --speedtest включает реальную загрузку данных для замера Мбит/с
         res = subprocess.run(
             [CHECKER_PATH, "-u", "https://www.google.com/gen_204", "-f", "temp.txt", "--format", "json", "--speedtest"],
             capture_output=True, text=True, check=True
         )
         checked_data = json.loads(res.stdout)
     except Exception as e:
-        print(f"❌ Критическая ошибка при работе чекера: {e}")
+        print(f"❌ Критическая ошибка чекера: {e}")
         return
 
-    # ШАГ 3: Фильтрация по реальной скорости
+    # ШАГ 3: Фильтрация по порогу 2 Мбит/с
     filtered_links = []
     for node in checked_data:
-        # download приходит в байтах в секунду. Формула: (Байты * 8) / 1024 / 1024 = Мбит/с
         speed_bps = node.get('download', 0)
         speed_mbps = (speed_bps * 8) / (1024 * 1024)
         
         if speed_mbps >= MIN_SPEED_MBPS:
             filtered_links.append(node['link'])
 
-    # ШАГ 4: Сохранение результатов (ПЕРЕЗАПИСЬ)
-    # 1. Plain-файл (только ссылки)
+    # ШАГ 4: Сохранение результатов
+    # 1. Plain-файл
     with open(PLAIN_OUTPUT, "w", encoding='utf-8') as f:
         f.write("\n".join(filtered_links) + "\n")
 
-    # 2. Файл подписки (с заголовками)
+    # 2. Файл подписки
     today = datetime.datetime.now().strftime("%d-%m-%Y %H:%M")
     header = [
-        f"#profile-title: 🚀 КРОТ-5МБ-ОТБОР 🚀",
+        f"#profile-title: 🚀 КРОТ-2МБ-ОТБОР 🚀",
         f"#announce: Обновлено: {today} | Найдено: {len(filtered_links)}",
-        f"#profile-update-interval: 6",
         ""
     ]
     
@@ -110,7 +106,7 @@ def main():
         f.write("\n".join(header) + "\n")
         f.write("\n".join(filtered_links) + "\n")
             
-    print(f"✅ Готово! Найдено быстрых серверов: {len(filtered_links)}")
+    print(f"✅ Готово! Найдено серверов быстрее 2 Мбит/с: {len(filtered_links)}")
 
 if __name__ == "__main__":
     main()
