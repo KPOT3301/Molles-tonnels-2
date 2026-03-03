@@ -22,7 +22,7 @@ def download_checker():
         os.chmod(CHECKER_PATH, 0o755)
 
 def main():
-    # Создаем файлы сразу, чтобы Actions не ругался
+    # Создаем файлы сразу
     for f in [OUTPUT_FILE, PLAIN_OUTPUT]:
         with open(f, "w", encoding='utf-8') as empty_f:
             empty_f.write("")
@@ -30,7 +30,7 @@ def main():
     download_checker()
     raw_links = set()
     
-    # 1. Сбор ссылок из links.txt
+    # 1. Сбор ссылок из источников
     if os.path.exists(INPUT_FILE):
         with open(INPUT_FILE, 'r') as f:
             sources = [l.strip() for l in f if l.strip()]
@@ -40,7 +40,6 @@ def main():
                 r = requests.get(url, timeout=10)
                 data = r.text
                 try: 
-                    # Пробуем декодировать base64 подписки
                     data = base64.b64decode(data.strip()).decode('utf-8')
                 except: pass
                 for line in data.splitlines():
@@ -49,18 +48,16 @@ def main():
                         raw_links.add(clean_line)
             except: continue
 
-    print(f"🔗 Найдено уникальных ссылок: {len(raw_links)}")
     if not raw_links:
-        print("❌ Ссылки не собраны. Проверьте links.txt!")
+        print("❌ Ссылки не собраны.")
         return
 
     with open("temp.txt", "w", encoding='utf-8') as f:
         f.write("\n".join(raw_links))
 
-    # 2. Проверка на ДОСТУПНОСТЬ (без жесткого Speedtest)
-    print("🔎 Проверка доступности серверов...")
+    # 2. Проверка
+    print(f"🔎 Проверка {len(raw_links)} серверов...")
     try:
-        # Убираем флаг --speedtest, оставляем обычный чек
         res = subprocess.run(
             [CHECKER_PATH, "-u", "https://www.google.com", "-f", "temp.txt", "--format", "json"],
             capture_output=True, text=True, check=True
@@ -68,28 +65,44 @@ def main():
         checked_data = json.loads(res.stdout)
     except Exception as e:
         print(f"❌ Ошибка чекера: {e}")
-        # Если чекер упал, просто сохраняем все сырые ссылки
-        checked_data = [{"link": l, "delay": 1} for l in raw_links]
+        return
 
-    # 3. Отбор тех, у кого delay > 0 (сервер ответил)
-    alive_nodes = sorted([n for n in checked_data if n.get('delay', 0) > 0], key=lambda x: x['delay'])
-    final_links = [n['link'] for n in alive_nodes]
+    # --- ФИЛЬТРАЦИЯ ДУБЛИКАТОВ ПО IP ---
+    unique_ips = set()
+    final_nodes = []
+    
+    # Сортируем по пингу (лучшие в начале)
+    sorted_nodes = sorted([n for n in checked_data if n.get('delay', 0) > 0], key=lambda x: x['delay'])
+
+    for node in sorted_nodes:
+        ip = node.get('ip', 'unknown')
+        
+        # Если IP новый или неизвестен (но сервер жив), добавляем
+        if ip == 'unknown':
+            # Если чекер не определил IP, но сервер ответил — оставляем на всякий случай
+            final_nodes.append(node['link'])
+        elif ip not in unique_ips:
+            unique_ips.add(ip)
+            final_nodes.append(node['link'])
 
     # 4. Сохранение
     with open(PLAIN_OUTPUT, "w", encoding='utf-8') as f:
-        f.write("\n".join(final_links))
+        f.write("\n".join(final_nodes))
 
     today = datetime.datetime.now().strftime("%d-%m-%Y %H:%M")
+    total_scanned = len(raw_links)
+    total_final = len(final_nodes)
+    
     header = [
-        f"#profile-title: 🚀 КРОТ-TUNNELS-LIVE 🚀",
-        f"#announce: Обновлено: {today} | Рабочих: {len(final_links)}",
+        f"#profile-title: 🚀 КРОТ-ULTRA-UNIQUE 🚀",
+        f"#announce: 🛰 Просканировано: {total_scanned} | Уникальных IP: {total_final} | {today}",
         ""
     ]
     with open(OUTPUT_FILE, "w", encoding='utf-8') as f:
         f.write("\n".join(header) + "\n")
-        f.write("\n".join(final_links))
+        f.write("\n".join(final_nodes))
             
-    print(f"✅ Готово! Сохранено живых серверов: {len(final_links)}")
+    print(f"✅ Готово! Из {total_scanned} ссылок оставлено {total_final} уникальных серверов.")
 
 if __name__ == "__main__":
     main()
