@@ -2,9 +2,8 @@ name: Update VPN Subscription
 
 on:
   schedule:
-    # Запуск в 00:00 по МСК (21:00 UTC)
     - cron: '0 21 * * *'
-  workflow_dispatch: # Кнопка для ручного запуска
+  workflow_dispatch: 
 
 permissions:
   contents: write
@@ -15,6 +14,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # Гарантируем полную загрузку всех файлов
+          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -24,16 +26,27 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
+      - name: Debug Info
+        # Эта команда покажет в логах, какие файлы реально видит робот
+        run: ls -R
+
       - name: Run script
-        # ВАЖНО: запуск твоего файла
-        run: python GENERATOR.py
+        run: |
+          # Проверяем наличие файла перед запуском, чтобы не гадать
+          if [ -f "GENERATOR.py" ]; then
+            python GENERATOR.py
+          elif [ -f "Generator.py" ]; then
+            python Generator.py
+          else
+            echo "❌ ОШИБКА: Файл GENERATOR.py не найден в корне репозитория!"
+            exit 1
+          fi
 
       - name: Commit and Push
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add subscription.txt links_plain.txt
-          
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
@@ -52,7 +65,6 @@ jobs:
           name: "🇷🇺 КРОТовыеТОННЕЛИ 🇷🇺"
           body: |
             📅 Обновлено (МСК): $(date -d '+3 hours' +'%d-%m-%Y %H:%M')
-            🚀 Топ-10% самых быстрых серверов помечены ракетами.
-            🛰 Всего рабочих узлов: $(grep -c "://" subscription.txt || echo "0")
+            🚀 Топ-10% серверов с ракетами.
           env:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
