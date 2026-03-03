@@ -4,11 +4,10 @@ on:
   schedule:
     # Запуск в 21:00 UTC (00:00 по МСК)
     - cron: '0 21 * * *'
-  workflow_dispatch: # Кнопка ручного запуска в Actions
+  workflow_dispatch: # Кнопка ручного запуска
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
   build:
@@ -16,8 +15,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -28,7 +25,8 @@ jobs:
         run: pip install requests
 
       - name: Run script
-        run: python main.py
+        # ИСХОДНОЕ ИМЯ ТВОЕГО ФАЙЛА
+        run: python GENERATOR.py
 
       - name: Commit and Push
         run: |
@@ -36,12 +34,10 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add subscription.txt links_plain.txt
           
-          # Проверка на наличие изменений
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            CURRENT_DATE=$(date -d '+3 hours' +'%d-%m-%Y')
-            git commit -m "Daily update MSK $CURRENT_DATE"
+            git commit -m "Daily update MSK $(date -d '+3 hours' +'%d-%m-%Y')"
             git push
           fi
 
@@ -55,10 +51,8 @@ jobs:
           tag_name: latest
           name: "🇷🇺 КРОТовыеТОННЕЛИ 🇷🇺"
           body: |
-            📅 Последнее обновление (МСК): $(date -d '+3 hours' +'%d-%m-%Y %H:%M')
-            🚀 Все серверы проверены на доступность YouTube.
-            ⚡ Самые быстрые 10% помечены ракетами.
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            📅 Обновлено (МСК): $(date -d '+3 hours' +'%d-%m-%Y %H:%M')
+            🚀 Самые быстрые 10% серверов помечены ракетами.
+            🛰 Всего рабочих узлов: $(grep -c "://" subscription.txt || echo "0")
+          env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
