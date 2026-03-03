@@ -1,1 +1,8 @@
-#announce: 🚀 РАБОЧИХ 0 | 📅 03-03-2026
+#profile-title:🇷🇺КРОТовыеТОННЕЛИ🇷🇺
+#subscription-userinfo: upload=0; download=0; total=0; expire=0
+#profile-update-interval: 1
+#support-url:🇷🇺КРОТовыеТОННЕЛИ🇷🇺
+#profile-web-page-url:🇷🇺КРОТовыеТОННЕЛИ🇷🇺
+#announce: АКТИВНЫХ СЕРВЕРОВ 2 | ОБНОВЛЕНО 03-03-2026
+vless://01638edd-ddd2-07d0-b437-48761495d07e@46.235.186.203:443/?type=ws&encryption=none&flow=&host=lk-cdn.deploy-assure.ru&path=%2F%2F&security=tls&sni=lk-cdn.deploy-assure.ru&fp=chrome#СЕРВЕР 0001 | ОБНОВЛЕН 03-03-2026
+vless://01638edd-ddd2-07d0-b437-48761495d07e@212.193.157.118:443/?type=ws&encryption=none&flow=&host=lk-cdn.deploy-assure.ru&path=%2F%2F&security=tls&sni=lk-cdn.deploy-assure.ru&fp=chrome#СЕРВЕР 0002 | ОБНОВЛЕН 03-03-2026
