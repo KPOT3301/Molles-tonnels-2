@@ -1,156 +1,106 @@
-import os
-import requests
-import base64
-import json
 import subprocess
-import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import json
+import os
+import sys
 
-INPUT_FILE = "links.txt"
-OUTPUT_FILE = "subscription.txt"
-PLAIN_OUTPUT = "links_plain.txt"
-CHECKER_URL = "https://github.com/nndrizhu/nodes-checker/releases/latest/download/nodes-checker-linux-amd64"
-CHECKER_PATH = "./nodes-checker"
+CHECKER_PATH = "nodes-checker.exe"  # путь к checker
+MAX_DELAY = 70
+TIMEOUT_SECONDS = 180
 
-MAX_DELAY = 120
-TOP_LIMIT = 25
-THREADS = 20  # безопасно для GitHub Actions
+YOUTUBE_TEST = "https://www.youtube.com"
+CLOUDFLARE_TEST = "https://www.cloudflare.com"
 
-
-# ---------- Скачать чекер ----------
-def download_checker():
-    if not os.path.exists(CHECKER_PATH):
-        r = requests.get(CHECKER_URL)
-        with open(CHECKER_PATH, "wb") as f:
-            f.write(r.content)
-        os.chmod(CHECKER_PATH, 0o755)
+INPUT_FILE = "nodes.txt"
+TEMP_FILE = "temp_nodes.txt"
+OUTPUT_FILE = "good_nodes.txt"
 
 
-# ---------- Переименование ----------
-def rename_server(link, index):
-    num = str(index).zfill(4)
-    today = datetime.datetime.now().strftime("%d-%m-%Y")
-    icon = "🚀" if index <= 3 else "⚡"
-    clean_name = f"{icon} SERVER-{num} | {today}"
+def run_checker(test_url):
+    result = subprocess.run(
+        [
+            CHECKER_PATH,
+            "-u", test_url,
+            "-f", TEMP_FILE,
+            "--format", "json"
+        ],
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT_SECONDS
+    )
 
-    if link.startswith("vless://"):
-        return link.split("#")[0] + "#" + clean_name
+    if result.returncode != 0:
+        print(f"Ошибка checker: {result.stderr}")
+        return []
 
-    if link.startswith("vmess://"):
-        try:
-            data = json.loads(base64.b64decode(link[8:]).decode())
-            data["ps"] = clean_name
-            return "vmess://" + base64.b64encode(
-                json.dumps(data).encode()
-            ).decode()
-        except:
-            return link
-
-    return link
+    try:
+        return json.loads(result.stdout)
+    except:
+        print("Ошибка чтения JSON")
+        return []
 
 
-# ---------- Сбор нод ----------
-def collect_nodes():
-    raw = {}
-
+def main():
     if not os.path.exists(INPUT_FILE):
-        return raw
+        print("nodes.txt не найден")
+        sys.exit()
 
-    with open(INPUT_FILE) as f:
-        sources = [l.strip() for l in f if l.strip()]
+    with open(INPUT_FILE, "r", encoding="utf-8") as f:
+        nodes = list(set(line.strip() for line in f if line.strip()))
 
-    for url in sources:
-        try:
-            r = requests.get(url, timeout=10)
-            data = r.text.strip()
-            try:
-                data = base64.b64decode(data).decode()
-            except:
-                pass
+    print(f"Всего нод: {len(nodes)}")
 
-            for line in data.splitlines():
-                line = line.strip()
-                if line.startswith(("vless://", "vmess://")):
-                    raw[line.split("#")[0]] = line
-        except:
+    # создаем один temp файл (без гонок)
+    with open(TEMP_FILE, "w", encoding="utf-8") as f:
+        f.write("\n".join(nodes))
+
+    print("Проверка YouTube...")
+    yt_results = run_checker(YOUTUBE_TEST)
+
+    print("Проверка Cloudflare...")
+    cf_results = run_checker(CLOUDFLARE_TEST)
+
+    # превращаем в словарь для быстрого доступа
+    yt_dict = {r["link"]: r for r in yt_results if "delay" in r}
+    cf_dict = {r["link"]: r for r in cf_results if "delay" in r}
+
+    good_nodes = []
+
+    for link in nodes:
+        yt = yt_dict.get(link)
+        cf = cf_dict.get(link)
+
+        if not yt or not cf:
             continue
 
-    return raw
+        yt_delay = yt.get("delay", 0)
+        cf_delay = cf.get("delay", 0)
 
+        # жесткая фильтрация
+        if (
+            0 < yt_delay <= MAX_DELAY and
+            0 < cf_delay <= MAX_DELAY
+        ):
+            avg_delay = (yt_delay + cf_delay) / 2
 
-# ---------- Проверка одной ноды ----------
-def check_node(link):
-    try:
-        with open("temp_single.txt", "w") as f:
-            f.write(link)
-
-        res = subprocess.run(
-            [CHECKER_PATH, "-u", "https://www.youtube.com",
-             "-f", "temp_single.txt", "--format", "json"],
-            capture_output=True,
-            text=True,
-            timeout=25
-        )
-
-        data = json.loads(res.stdout)
-        if data and data[0].get("delay", 0) > 0:
-            return {
+            good_nodes.append({
                 "link": link,
-                "delay": data[0]["delay"]
-            }
-    except:
-        pass
+                "yt_delay": yt_delay,
+                "cf_delay": cf_delay,
+                "avg_delay": avg_delay
+            })
 
-    return None
+    # сортировка по средней задержке
+    good_nodes.sort(key=lambda x: x["avg_delay"])
 
-
-# ---------- Основной запуск ----------
-def main():
-    download_checker()
-    nodes = collect_nodes()
-
-    if not nodes:
-        return
-
-    # сохраняем сырой список
-    with open(PLAIN_OUTPUT, "w", encoding="utf-8") as f:
-        f.write("\n".join(nodes.values()))
-
-    results = []
-
-    # ПАРАЛЛЕЛЬНАЯ ПРОВЕРКА
-    with ThreadPoolExecutor(max_workers=THREADS) as executor:
-        futures = {executor.submit(check_node, link): link
-                   for link in nodes.values()}
-
-        for future in as_completed(futures):
-            result = future.result()
-            if result and result["delay"] <= MAX_DELAY:
-                results.append(result)
-
-    if not results:
-        return
-
-    # Рейтинг
-    for node in results:
-        node["score"] = 1000 / node["delay"]
-
-    results = sorted(results, key=lambda x: x["score"], reverse=True)
-    results = results[:TOP_LIMIT]
-
-    # Заголовок
-    today = datetime.datetime.now().strftime("%d-%m-%Y %H:%M")
-    header = [
-        "#profile-title: 🚀 PREMIUM TUNNELS",
-        "#profile-update-interval: 1",
-        f"#announce: ⚡ Servers: {len(results)} | Updated: {today}",
-        ""
-    ]
+    print(f"Прошли фильтр: {len(good_nodes)}")
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write("\n".join(header) + "\n")
-        for i, node in enumerate(results, 1):
-            f.write(rename_server(node["link"], i) + "\n")
+        for node in good_nodes:
+            f.write(node["link"] + "\n")
+
+    print("Готово. Лучшие ноды сохранены в good_nodes.txt")
+
+    os.remove(TEMP_FILE)
 
 
 if __name__ == "__main__":
