@@ -27,15 +27,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install aiohttp
 
-      - name: Run updater
+      - name: Run generator
         run: |
-          python main.py
+          python GENERATOR.py
 
       - name: Commit if changed
         run: |
           git config --local user.email "github-actions@github.com"
           git config --local user.name "github-actions"
+
           git add Molestunnels.txt Molestunnels_base64.txt
+
           if git diff --cached --quiet; then
             echo "No changes"
           else
