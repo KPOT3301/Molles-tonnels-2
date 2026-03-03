@@ -1,115 +1,162 @@
-import os, requests, base64, json, time, socket, datetime, concurrent.futures
+import os
+import requests
+import base64
+import json
+import subprocess
+import stat
+import time
+import socket
+import datetime
+from urllib.parse import urlparse, urlunparse, quote, unquote
 
 # --- НАСТРОЙКИ ---
 INPUT_FILE = 'links.txt'
-OUTPUT_FILE = 'subscription.txt'      # Base64
-OUTPUT_PLAIN = 'links_plain.txt'       # Текст
-BATCH_SIZE = 100
-MAX_WORKERS = 50                       # Оптимально для HTTP-тестов
-HTTP_CHECK_URL = "http://connectivitycheck.gstatic.com/generate_204"
-TIMEOUT = 5                            # Макс. время ожидания ответа
+OUTPUT_FILE = 'subscription.txt'
+CHECKER_URL = "https://github.com/nndrizhu/nodes-checker/releases/latest/download/nodes-checker-linux-amd64"
+CHECKER_PATH = "./nodes-checker"
+BATCH_SIZE = 100 
 
-def parse_node(link):
+def download_checker():
+    if not os.path.exists(CHECKER_PATH):
+        print("📥 Загрузка чекера...")
+        r = requests.get(CHECKER_URL)
+        with open(CHECKER_PATH, "wb") as f: f.write(r.content)
+        os.chmod(CHECKER_PATH, os.stat(CHECKER_PATH).st_mode | stat.S_IEXEC)
+
+def parse_host(link):
     try:
         if link.startswith('vless://'):
-            part = link.split('@')[1].split('?')[0].split('#')[0]
-            h, p = part.split(':')
-            return h, int(p)
-        if link.startswith('vmess://'):
-            d = json.loads(base64.b64decode(link[8:]).decode('utf-8'))
-            return d.get('add'), int(d.get('port'))
-    except: return None, None
-
-def check_proxy_working(link):
-    """Тщательная проверка: TCP порт + попытка HTTP запроса"""
-    host, port = parse_node(link)
-    if not host or not port: return None
-    
-    start_time = time.time()
-    try:
-        # 1. Сначала быстрый TCP-чек, чтобы не тратить время на "мертвых"
-        with socket.create_connection((host, port), timeout=2):
-            pass
-            
-        # 2. Легкий HTTP запрос через прокси (L7 тест)
-        # Мы используем встроенный механизм requests для проверки доступности
-        # ВАЖНО: На GitHub Actions этот метод проверяет именно "живучесть" порта
-        # Для полноценного проксирования через VLESS/VMESS на Python нужны доп. библиотеки,
-        # поэтому мы делаем замер задержки отклика сокета как основной критерий качества.
-        
-        delay = int((time.time() - start_time) * 1000)
-        return {"link": link, "delay": delay, "host": host}
-    except:
-        return None
+            # Извлекаем хост из vless://uuid@host:port...
+            return link.split('@')[1].split(':')[0].split('?')[0]
+        if link.startswith('vmess://'): 
+            v_json = json.loads(base64.b64decode(link[8:]).decode('utf-8'))
+            return v_json.get('add')
+    except: return None
+    return None
 
 def get_batch_ip_info(hosts):
-    if not hosts: return {}
+    ips_to_query, host_to_ip = [], {}
+    for h in hosts:
+        try:
+            ip = socket.gethostbyname(h)
+            ips_to_query.append(ip)
+            host_to_ip[h] = ip
+        except: continue
+    if not ips_to_query: return {}
     try:
-        u_ips = list(set(hosts))[:100]
-        res = requests.post("http://ip-api.com/batch?fields=status,query,countryCode,isp,proxy", json=u_ips, timeout=10).json()
-        return {i['query']: i for i in res if i.get('status') == 'success'}
+        unique_ips = list(set(ips_to_query))[:BATCH_SIZE]
+        url = "http://ip-api.com/batch?fields=status,query,countryCode,isp,proxy"
+        res = requests.post(url, json=unique_ips, timeout=10).json()
+        ip_map = {i['query']: i for i in res if i.get('status') == 'success'}
+        return {h: ip_map[ip] for h, ip in host_to_ip.items() if ip in ip_map}
     except: return {}
 
 def rename_server(link, info, index):
+    """Безопасное переименование без поломки параметров протокола."""
     flag = info.get('countryCode', 'UN')
     isp = info.get('isp', 'Unknown').split()[0].strip(',.')
     num = str(index).zfill(4)
     date = datetime.datetime.now().strftime("%d-%m-%Y")
+    
+    # Новое название
     new_ps = f"[{flag}] {isp} | №{num} | {date}"
+
     if link.startswith('vless://'):
-        return f"{link.split('#')[0]}#{new_ps}"
-    if link.startswith('vmess://'):
+        # Убираем старое имя после # если оно есть
+        base_part = link.split('#')[0]
+        # quote нужен, чтобы спецсимволы не ломали парсинг в приложении
+        return f"{base_part}#{quote(new_ps)}"
+        
+    elif link.startswith('vmess://'):
         try:
-            d = json.loads(base64.b64decode(link[8:]).decode('utf-8'))
-            d['ps'] = new_ps
-            return "vmess://" + base64.b64encode(json.dumps(d).encode('utf-8')).decode('utf-8')
-        except: return link
+            v_data = json.loads(base64.b64decode(link[8:]).decode('utf-8'))
+            v_data['ps'] = new_ps # В vmess название хранится в поле ps
+            return "vmess://" + base64.b64encode(json.dumps(v_data).encode('utf-8')).decode('utf-8')
+        except:
+            return link
     return link
 
 def main():
-    print(f"🚀 Старт глубокой проверки: {datetime.datetime.now()}")
-    raw_links = {}
+    download_checker()
+    
+    # 1. Сбор и дедупликация
+    raw_links_dict = {} 
     if os.path.exists(INPUT_FILE):
         with open(INPUT_FILE, 'r') as f:
-            srcs = [l.strip() for l in f if l.strip() and not l.startswith('#')]
-        for url in srcs:
+            sources = [line.strip() for line in f if line.strip()]
+        
+        for url in sources:
             try:
+                print(f"📡 Чтение источника: {url}")
                 r = requests.get(url, timeout=15)
                 data = r.text
-                try: data = base64.b64decode(data.strip()).decode('utf-8')
-                except: pass
+                # Пробуем декодировать если весь файл в base64
+                try: 
+                    data = base64.b64decode(data.strip()).decode('utf-8')
+                except: 
+                    pass
+                
                 for line in data.splitlines():
-                    if line.strip().startswith(('vless://', 'vmess://')):
-                        raw_links[line.strip().split('#')[0]] = line.strip()
-            except: continue
+                    link = line.strip()
+                    if link.startswith(('vless://', 'vmess://')):
+                        # Ключ для дедупликации - ссылка без имени
+                        link_body = link.split('#')[0]
+                        if link_body not in raw_links_dict:
+                            raw_links_dict[link_body] = link
+            except Exception as e:
+                print(f"⚠️ Ошибка при чтении {url}: {e}")
 
-    alive_nodes = []
-    if raw_links:
-        print(f"📡 Тестирование {len(raw_links)} серверов...")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            results = list(executor.map(check_proxy_working, raw_links.values()))
-            alive_nodes = sorted([r for r in results if r], key=lambda x: x['delay'])
+    if not raw_links_dict:
+        print("🛑 Ссылок не найдено.")
+        return
 
-    final_list = []
-    if alive_nodes:
-        print(f"🌍 Фильтрация и Geo-IP...")
-        for i in range(0, len(alive_nodes), BATCH_SIZE):
-            chunk = alive_nodes[i:i+BATCH_SIZE]
-            i_map = get_batch_ip_info([n['host'] for n in chunk])
-            for n in chunk:
-                info = i_map.get(n['host'], {})
-                # Игнорируем Cloudflare и пустые ISP
-                if info and "Cloudflare" not in info.get('isp', ''):
-                    final_list.append(rename_server(n['link'], info, len(final_list) + 1))
-            time.sleep(1)
-
-    # Сохранение
-    plain = "\n".join(final_list)
-    with open(OUTPUT_PLAIN, "w", encoding='utf-8') as f: f.write(plain)
-    with open(OUTPUT_FILE, "w", encoding='utf-8') as f:
-        f.write(base64.b64encode(plain.encode('utf-8')).decode('utf-8') if final_list else "")
+    # 2. Проверка YouTube (Ядро Xray)
+    print(f"🚀 Проверка {len(raw_links_dict)} серверов...")
+    with open("temp.txt", "w") as f:
+        f.write("\n".join(raw_links_dict.values()))
     
-    print(f"✨ Проверка завершена. Найдено качественных серверов: {len(final_list)}")
+    res = subprocess.run([CHECKER_PATH, "-u", "https://www.youtube.com", "-f", "temp.txt", "--format", "json"], capture_output=True, text=True)
+    
+    try:
+        checked_data = json.loads(res.stdout)
+    except:
+        print("❌ Ошибка парсинга результатов чекера.")
+        return
+
+    # Фильтруем только рабочие и сортируем по задержке
+    alive_nodes = [n for n in checked_data if n.get('delay', 0) > 0]
+    alive_nodes.sort(key=lambda x: x.get('delay', 9999))
+
+    # 3. Анализ IP и переименование
+    print(f"🌍 Фильтрация IP и провайдеров...")
+    final_links = []
+    current_index = 1 
+    
+    for i in range(0, len(alive_nodes), BATCH_SIZE):
+        chunk = alive_nodes[i:i+BATCH_SIZE]
+        hosts = [parse_host(n['link']) for n in chunk if parse_host(n['link'])]
+        info_map = get_batch_ip_info(hosts)
+        
+        for n in chunk:
+            host = parse_host(n['link'])
+            info = info_map.get(host)
+            
+            # Исключаем Cloudflare (часто лагает в Hiddify)
+            if info and "Cloudflare" not in info.get('isp', ''):
+                renamed = rename_server(n['link'], info, current_index)
+                final_links.append(renamed)
+                current_index += 1
+        
+        time.sleep(1.5)
+
+    # 4. Перезапись подписки (Base64)
+    if final_links:
+        encoded_data = base64.b64encode("\n".join(final_links).encode('utf-8')).decode('utf-8')
+        with open(OUTPUT_FILE, "w", encoding='utf-8') as f:
+            f.write(encoded_data)
+        print(f"✨ Готово! Рабочих серверов сохранено: {len(final_links)}")
+    else:
+        print("🛑 Ни один сервер не прошел проверку.")
 
 if __name__ == "__main__":
     main()
