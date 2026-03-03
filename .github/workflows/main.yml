@@ -24,9 +24,8 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Run Generator
-        # ВАЖНО: Мы исправили main.py на GENERATOR.py
-        run: python GENERATOR.py
+      - name: Run script
+        run: python GENERATOR.py  # Убедитесь, что здесь не main.py!
 
       - name: Commit and Push
         run: |
