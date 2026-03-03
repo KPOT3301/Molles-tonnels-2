@@ -2,13 +2,12 @@ name: Check Vless Servers
 
 on:
   schedule:
-    - cron: '0 */6 * * *'   # каждые 6 часов
-  workflow_dispatch:          # ручной запуск
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
 
 jobs:
   generate:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -19,7 +18,14 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: pip install requests python-v2ray
+        run: pip install requests
+
+      - name: Download Xray-core
+        run: |
+          wget -q https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+          unzip -q Xray-linux-64.zip -d xray-core
+          chmod +x xray-core/xray
+          echo "$(pwd)/xray-core" >> $GITHUB_PATH
 
       - name: Run GENERATOR.py
         run: python GENERATOR.py
