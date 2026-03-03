@@ -9,6 +9,8 @@ from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 from zoneinfo import ZoneInfo
 
+import requests
+
 TIMEOUT = 5
 XRAY_PATH = "./xray"
 TEST_URL = "https://www.google.com"
@@ -18,7 +20,8 @@ TEST_URL = "https://www.google.com"
 async def tcp_check(host, port):
     try:
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port), timeout=TIMEOUT
+            asyncio.open_connection(host, port),
+            timeout=TIMEOUT
         )
         writer.close()
         await writer.wait_closed()
@@ -30,94 +33,82 @@ async def tcp_check(host, port):
 # ================= VLESS PARSER =================
 def parse_vless(link):
     parsed = urlparse(link)
-    uuid = parsed.username
-    host = parsed.hostname
-    port = parsed.port
+
     params = parse_qs(parsed.query)
 
-    def get_param(key, default=None):
+    def get(key, default=None):
         return params.get(key, [default])[0]
 
     return {
-        "uuid": uuid,
-        "host": host,
-        "port": port,
-        "type": get_param("type", "tcp"),
-        "security": get_param("security", "none"),
-        "sni": get_param("sni"),
-        "path": get_param("path", ""),
-        "host_header": get_param("host"),
-        "serviceName": get_param("serviceName"),
-        "flow": get_param("flow"),
-        "pbk": get_param("pbk"),
-        "sid": get_param("sid"),
+        "uuid": parsed.username,
+        "host": parsed.hostname,
+        "port": parsed.port,
+        "type": get("type", "tcp"),
+        "security": get("security", "none"),
+        "sni": get("sni"),
+        "path": get("path", ""),
+        "host_header": get("host"),
+        "serviceName": get("serviceName"),
+        "flow": get("flow"),
+        "pbk": get("pbk"),
+        "sid": get("sid"),
     }
 
 
-# ================= XRAY CONFIG BUILDER =================
+# ================= XRAY CONFIG =================
 def build_config(data):
-    stream_settings = {
+    stream = {
         "network": data["type"],
         "security": data["security"],
     }
 
-    # TLS
     if data["security"] == "tls":
-        stream_settings["tlsSettings"] = {
+        stream["tlsSettings"] = {
             "serverName": data["sni"] or data["host"]
         }
 
-    # Reality
     if data["security"] == "reality":
-        stream_settings["realitySettings"] = {
+        stream["realitySettings"] = {
             "serverName": data["sni"],
             "publicKey": data["pbk"],
-            "shortId": data["sid"] or "",
+            "shortId": data["sid"] or ""
         }
 
-    # WS
     if data["type"] == "ws":
-        stream_settings["wsSettings"] = {
+        stream["wsSettings"] = {
             "path": data["path"],
-            "headers": {"Host": data["host_header"]} if data["host_header"] else {},
+            "headers": {"Host": data["host_header"]} if data["host_header"] else {}
         }
 
-    # gRPC
     if data["type"] == "grpc":
-        stream_settings["grpcSettings"] = {
+        stream["grpcSettings"] = {
             "serviceName": data["serviceName"]
         }
 
     outbound = {
         "protocol": "vless",
         "settings": {
-            "vnext": [
-                {
-                    "address": data["host"],
-                    "port": int(data["port"]),
-                    "users": [
-                        {
-                            "id": data["uuid"],
-                            "encryption": "none",
-                            "flow": data["flow"],
-                        }
-                    ],
-                }
-            ]
+            "vnext": [{
+                "address": data["host"],
+                "port": int(data["port"]),
+                "users": [{
+                    "id": data["uuid"],
+                    "encryption": "none",
+                    "flow": data["flow"]
+                }]
+            }]
         },
-        "streamSettings": stream_settings,
+        "streamSettings": stream
     }
 
     return {
-        "inbounds": [
-            {
-                "port": 10808,
-                "listen": "127.0.0.1",
-                "protocol": "socks",
-                "settings": {"udp": False},
-            }
-        ],
-        "outbounds": [outbound],
+        "inbounds": [{
+            "port": 10808,
+            "listen": "127.0.0.1",
+            "protocol": "socks",
+            "settings": {"udp": False}
+        }],
+        "outbounds": [outbound]
     }
 
 
@@ -139,23 +130,21 @@ def xray_check(link):
 
         time.sleep(2)
 
-        result = subprocess.run(
-            [
-                "curl",
-                "--socks5",
-                "127.0.0.1:10808",
-                "-m",
-                "8",
-                TEST_URL,
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        proxies = {
+            "http": "socks5h://127.0.0.1:10808",
+            "https": "socks5h://127.0.0.1:10808",
+        }
+
+        try:
+            r = requests.get(TEST_URL, proxies=proxies, timeout=8)
+            ok = r.status_code == 200
+        except:
+            ok = False
 
         proc.kill()
         os.remove(tmp_path)
 
-        return result.returncode == 0
+        return ok
 
     except:
         return False
@@ -166,12 +155,10 @@ async def check_vless(link):
     try:
         data = parse_vless(link)
 
-        # TCP first
         tcp_ok = await tcp_check(data["host"], data["port"])
         if not tcp_ok:
             return False
 
-        # Xray real test
         return xray_check(link)
 
     except:
@@ -179,10 +166,10 @@ async def check_vless(link):
 
 
 async def process_links(links):
-    alive = []
     tasks = [check_vless(link) for link in links]
     results = await asyncio.gather(*tasks)
 
+    alive = []
     for link, ok in zip(links, results):
         if ok:
             alive.append(link)
@@ -190,12 +177,12 @@ async def process_links(links):
     return alive
 
 
-# ================= FILE WRITE =================
+# ================= FILE WRITER =================
 def write_files(alive):
-    moscow_time = datetime.now(ZoneInfo("Europe/Moscow"))
-    update_date = moscow_time.strftime("%d-%m-%Y")
+    moscow = datetime.now(ZoneInfo("Europe/Moscow"))
+    date_str = moscow.strftime("%d-%m-%Y")
 
-    announce = f"#announce: 🚀 РАБОЧИХ {len(alive)} | 📅 {update_date}"
+    announce = f"#announce: 🚀 РАБОЧИХ {len(alive)} | 📅 {date_str}"
 
     with open("Molestunnels.txt", "w", encoding="utf-8") as f:
         f.write(announce + "\n")
@@ -210,7 +197,7 @@ def write_files(alive):
         f.write(encoded)
 
 
-# ================= ENTRY =================
+# ================= MAIN =================
 async def main():
     with open("sslist.txt", "r", encoding="utf-8") as f:
         links = [l.strip() for l in f if l.startswith("vless://")]
