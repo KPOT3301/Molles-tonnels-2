@@ -2,12 +2,13 @@ name: Update VPN Subscription
 
 on:
   schedule:
-    # 21:00 UTC = 00:00 MSK (один раз в сутки)
+    # Запуск в 21:00 UTC (00:00 по МСК)
     - cron: '0 21 * * *'
-  workflow_dispatch: # Позволяет запускать вручную кнопкой в любое время
+  workflow_dispatch: # Кнопка ручного запуска в Actions
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   build:
@@ -15,9 +16,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
@@ -29,13 +32,20 @@ jobs:
 
       - name: Commit and Push
         run: |
-          git config --global user.name "GitHub Action"
-          git config --global user.email "action@github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add subscription.txt links_plain.txt
-          # Проверяем изменения, чтобы избежать пустых коммитов
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Daily update MSK $(date -d '+3 hours' +'%d-%m-%Y')" && git push)
+          
+          # Проверка на наличие изменений
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            CURRENT_DATE=$(date -d '+3 hours' +'%d-%m-%Y')
+            git commit -m "Daily update MSK $CURRENT_DATE"
+            git push
+          fi
 
-      - name: Release Latest
+      - name: Create or Update Release
         if: success()
         uses: softprops/action-gh-release@v1
         with:
@@ -43,7 +53,12 @@ jobs:
             subscription.txt
             links_plain.txt
           tag_name: latest
-          name: "VPN Subscription Updated"
-          body: "Обновлено (МСК): $(date -d '+3 hours' +'%d-%m-%Y %H:%M')"
+          name: "🇷🇺 КРОТовыеТОННЕЛИ 🇷🇺"
+          body: |
+            📅 Последнее обновление (МСК): $(date -d '+3 hours' +'%d-%m-%Y %H:%M')
+            🚀 Все серверы проверены на доступность YouTube.
+            ⚡ Самые быстрые 10% помечены ракетами.
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
