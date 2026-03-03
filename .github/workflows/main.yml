@@ -4,7 +4,7 @@ on:
   schedule:
     # Запуск в 21:00 UTC (00:00 по МСК)
     - cron: '0 21 * * *'
-  workflow_dispatch: # Кнопка ручного запуска
+  workflow_dispatch: # Позволяет запускать вручную
 
 permissions:
   contents: write
@@ -25,7 +25,7 @@ jobs:
         run: pip install requests
 
       - name: Run script
-        # ИСХОДНОЕ ИМЯ ТВОЕГО ФАЙЛА
+        # ВАЖНО: Запускаем именно GENERATOR.py
         run: python GENERATOR.py
 
       - name: Commit and Push
