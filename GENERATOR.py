@@ -6,11 +6,10 @@ from datetime import datetime
 
 INPUT_FILE = "sslist.txt"
 OUTPUT_FILE = "subscription.txt"
-ANNOUNCE_FILE = "announce.txt"
 
 TIMEOUT = 5
 CHECKS = 3
-MAX_STABILITY = 100  # максимальный допустимый разброс
+MAX_STABILITY = 100  # максимальный допустимый разброс (ms)
 
 
 def parse_ss(link):
@@ -32,7 +31,6 @@ def parse_ss(link):
             "password": password,
             "server": server,
             "port": int(port),
-            "raw": link
         }
     except:
         return None
@@ -64,13 +62,13 @@ async def check_server(session, server_data):
     if len(latencies) < 2:
         return None
 
-    avg = sum(latencies) / len(latencies)
+    average = sum(latencies) / len(latencies)
     stability = max(latencies) - min(latencies)
 
     if stability > MAX_STABILITY:
         return None
 
-    score = avg + stability * 0.5
+    score = average + stability * 0.5
 
     server_data["score"] = score
     return server_data
@@ -85,28 +83,32 @@ async def main():
     for link in links:
         if is_canada(link):
             continue
+
         parsed = parse_ss(link)
         if parsed:
             parsed_servers.append(parsed)
 
-    working = []
+    working_servers = []
 
     async with aiohttp.ClientSession() as session:
-        tasks = [check_server(session, s) for s in parsed_servers]
+        tasks = [check_server(session, server) for server in parsed_servers]
         results = await asyncio.gather(*tasks)
 
-        for r in results:
-            if r:
-                working.append(r)
+        for result in results:
+            if result:
+                working_servers.append(result)
 
     # сортировка по smart-score
-    working.sort(key=lambda x: x["score"])
+    working_servers.sort(key=lambda x: x["score"])
 
     today = datetime.now().strftime("%d-%m-%Y")
+    active_count = len(working_servers)
 
     final_links = []
-    for i, server in enumerate(working, 1):
-        flag = "🌍"  # если есть автоопределение — вставляется сюда
+
+    for i, server in enumerate(working_servers, 1):
+        flag = "🌍"  # сюда можно вставить автоопределение страны
+
         name = f"{flag} СЕРВЕР {i:03d} | ОБНОВЛЕН {today}"
 
         encoded = base64.urlsafe_b64encode(
@@ -115,16 +117,14 @@ async def main():
 
         final_links.append(f"ss://{encoded}#{name}")
 
-    # сохраняем подписку
+    announce_line = f"#announce: 🚀 АКТИВНЫХ: {active_count} | 📅 {today}"
+
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        f.write(announce_line + "\n")
         f.write("\n".join(final_links))
 
-    # анонс
-    announce_text = f"✅ АКТИВНЫХ СЕРВЕРОВ: {len(final_links)} | ОБНОВЛЕНО {today}"
-    with open(ANNOUNCE_FILE, "w", encoding="utf-8") as f:
-        f.write(announce_text)
-
-    print(announce_text)
+    print("\n" + announce_line)
+    print(f"Сохранено рабочих серверов: {active_count}")
 
 
 asyncio.run(main())
