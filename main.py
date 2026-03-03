@@ -5,7 +5,7 @@ INPUT_FILE = 'links.txt'
 OUTPUT_FILE = 'subscription.txt'
 
 def check_node(host, port=443, timeout=2):
-    """Быстрая проверка доступности порта"""
+    """Быстрая проверка доступности порта по TCP"""
     try:
         socket.setdefaulttimeout(timeout)
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -16,7 +16,7 @@ def check_node(host, port=443, timeout=2):
         return False
 
 def parse_node_info(link):
-    """Извлечение хоста и порта"""
+    """Извлечение хоста и порта для проверки"""
     try:
         if link.startswith('vless://'):
             part = link.split('@')[1].split('?')[0]
@@ -42,15 +42,19 @@ def main():
             try:
                 r = requests.get(url, timeout=10)
                 content = r.text
-                try: content = base64.b64decode(content.strip()).decode('utf-8')
-                except: pass
+                try: 
+                    content = base64.b64decode(content.strip()).decode('utf-8')
+                except: 
+                    pass
                 
                 for line in content.splitlines():
                     if line.strip().startswith(('vless://', 'vmess://')):
+                        # Дедупликация: сравниваем только тело ссылки без имени
                         clean_link = line.strip().split('#')[0]
                         if clean_link not in unique_links:
                             unique_links[clean_link] = line.strip()
-            except: continue
+            except: 
+                continue
 
     if not unique_links:
         print("❌ No links found"); return
@@ -64,23 +68,25 @@ def main():
         host, port = parse_node_info(full_link)
         
         if host and check_node(host, port):
-            # МАКСИМАЛЬНО ПРОСТОЕ ИМЯ ДЛЯ HAPP
-            name = f"SERVER {str(idx).zfill(4)} | UPDATED {today}"
+            # МАКСИМАЛЬНО БЕЗОПАСНОЕ ИМЯ: №0001 | 03-03-2026
+            name = f"N{str(idx).zfill(4)} | {today}"
             
             if full_link.startswith('vless://'):
-                # Склеиваем строго: техническая_часть#Имя
+                # Приклеиваем имя после # к нетронутому телу ссылки
                 final_configs.append(f"{base_link}#{name}")
             else: # vmess
                 try:
                     data = json.loads(base64.b64decode(full_link[8:]).decode('utf-8'))
-                    data['ps'] = name
+                    data['ps'] = name # Обновляем поле PS внутри JSON
                     final_configs.append("vmess://" + base64.b64encode(json.dumps(data).encode('utf-8')).decode('utf-8'))
-                except: continue
+                except: 
+                    continue
             
             idx += 1
-            if idx > 200: break # Лимит для стабильности подписки
+            if idx > 300: break # Лимит для стабильности подписки
 
     if final_configs:
+        # Упаковываем весь список в Base64 для подписки
         out_data = base64.b64encode("\n".join(final_configs).encode('utf-8')).decode('utf-8')
         with open(OUTPUT_FILE, "w") as f:
             f.write(out_data)
