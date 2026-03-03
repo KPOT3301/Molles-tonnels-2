@@ -1,39 +1,49 @@
 name: Check Vless Servers
 
+# Запуск по расписанию (каждые 6 часов) и вручную
 on:
   schedule:
-    - cron: '0 */6 * * *'   # каждые 6 часов (можно настроить)
-  workflow_dispatch:         # возможность запуска вручную
+    - cron: '0 */6 * * *'   # каждые 6 часов (UTC)
+  workflow_dispatch:          # кнопка ручного запуска в интерфейсе GitHub
 
 jobs:
   generate:
     runs-on: ubuntu-latest
+
     steps:
+      # 1. Клонируем репозиторий
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. Устанавливаем Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
+      # 3. Устанавливаем зависимости Python (только requests)
+      - name: Install Python dependencies
         run: pip install requests
 
+      # 4. Скачиваем и распаковываем Xray-core (последняя версия)
       - name: Download Xray-core
         run: |
-          wget https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
-          unzip Xray-linux-64.zip -d xray-core
+          wget -q https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+          unzip -q Xray-linux-64.zip -d xray-core
           chmod +x xray-core/xray
-          echo "$(pwd)/xray-core" >> $GITHUB_PATH   # добавляем в PATH
+          # Добавляем папку с xray в PATH, чтобы скрипт мог его найти
+          echo "$(pwd)/xray-core" >> $GITHUB_PATH
 
+      # 5. Запускаем наш генератор
       - name: Run GENERATOR.py
         run: python GENERATOR.py
 
+      # 6. Если файл subscription.txt изменился, коммитим и пушим
       - name: Commit and push if subscription.txt changed
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add subscription.txt
+          # Проверяем, есть ли изменения для коммита
           git diff --quiet && git diff --staged --quiet || git commit -m "Auto-update subscription.txt"
           git push
