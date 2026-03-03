@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-TIMEOUT = 5
+TIMEOUT = 6
 XRAY_PATH = "./xray"
 TEST_URL = "https://www.google.com"
 
@@ -20,7 +20,7 @@ TEST_URL = "https://www.google.com"
 async def tcp_check(host, port):
     try:
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port),
+            asyncio.open_connection(host, int(port)),
             timeout=TIMEOUT
         )
         writer.close()
@@ -33,7 +33,6 @@ async def tcp_check(host, port):
 # ================= VLESS PARSER =================
 def parse_vless(link):
     parsed = urlparse(link)
-
     params = parse_qs(parsed.query)
 
     def get(key, default=None):
@@ -43,7 +42,7 @@ def parse_vless(link):
         "uuid": parsed.username,
         "host": parsed.hostname,
         "port": parsed.port,
-        "type": get("type", "tcp"),
+        "network": get("type", "tcp"),
         "security": get("security", "none"),
         "sni": get("sni"),
         "path": get("path", ""),
@@ -58,7 +57,7 @@ def parse_vless(link):
 # ================= XRAY CONFIG =================
 def build_config(data):
     stream = {
-        "network": data["type"],
+        "network": data["network"],
         "security": data["security"],
     }
 
@@ -74,13 +73,13 @@ def build_config(data):
             "shortId": data["sid"] or ""
         }
 
-    if data["type"] == "ws":
+    if data["network"] == "ws":
         stream["wsSettings"] = {
             "path": data["path"],
             "headers": {"Host": data["host_header"]} if data["host_header"] else {}
         }
 
-    if data["type"] == "grpc":
+    if data["network"] == "grpc":
         stream["grpcSettings"] = {
             "serviceName": data["serviceName"]
         }
@@ -102,6 +101,9 @@ def build_config(data):
     }
 
     return {
+        "log": {
+            "loglevel": "warning"
+        },
         "inbounds": [{
             "port": 10808,
             "listen": "127.0.0.1",
@@ -120,19 +122,19 @@ def xray_check(link):
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as tmp:
             tmp.write(json.dumps(config).encode())
-            tmp_path = tmp.name
+            config_path = tmp.name
 
         proc = subprocess.Popen(
-            [XRAY_PATH, "-config", tmp_path],
+            [XRAY_PATH, "-config", config_path],
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
         )
 
         time.sleep(2)
 
         proxies = {
             "http": "socks5h://127.0.0.1:10808",
-            "https": "socks5h://127.0.0.1:10808",
+            "https": "socks5h://127.0.0.1:10808"
         }
 
         try:
@@ -142,7 +144,7 @@ def xray_check(link):
             ok = False
 
         proc.kill()
-        os.remove(tmp_path)
+        os.remove(config_path)
 
         return ok
 
@@ -199,8 +201,17 @@ def write_files(alive):
 
 # ================= MAIN =================
 async def main():
+    if not os.path.exists("sslist.txt"):
+        print("sslist.txt not found")
+        return
+
     with open("sslist.txt", "r", encoding="utf-8") as f:
         links = [l.strip() for l in f if l.startswith("vless://")]
+
+    if not links:
+        print("No VLESS links found")
+        write_files([])
+        return
 
     alive = await process_links(links)
     write_files(alive)
