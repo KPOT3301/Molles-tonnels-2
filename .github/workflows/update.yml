@@ -3,9 +3,7 @@ name: Generator
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 21 * * *"   # 00:00 по Москве (UTC+3)
-  push:
-    branches: [ main ]
+    - cron: "0 21 * * *"   # 00:00 Москва (UTC+3)
 
 jobs:
   build:
@@ -29,11 +27,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install aiohttp
 
-      - name: Ensure servers.txt exists
+      - name: Ensure required files exist
         run: |
           if [ ! -f servers.txt ]; then
-            echo "servers.txt not found!"
-            exit 1
+            echo "servers.txt not found, creating empty file"
+            touch servers.txt
+          fi
+
+          if [ ! -f best_cache.json ]; then
+            echo '{"servers": []}' > best_cache.json
           fi
 
       - name: Run Generator
