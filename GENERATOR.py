@@ -3,27 +3,34 @@ import base64
 from datetime import datetime
 
 URLS = [
-    "ССЫЛКА_НА_ПОДПИСКУ_1",
-    "ССЫЛКА_НА_ПОДПИСКУ_2"
+    "ВСТАВЬ_СЮДА_СВОЮ_ССЫЛКУ"
 ]
 
 output = []
 seen = set()
 
 for url in URLS:
+    print("Проверяем:", url)
+
     try:
-        r = requests.get(url, timeout=20)
-        content = r.text.strip()
+        r = requests.get(url, timeout=30, headers={
+            "User-Agent": "Mozilla/5.0"
+        })
 
-        # пробуем base64
+        raw = r.text.strip()
+
+        print("Длина ответа:", len(raw))
+
+        # Пробуем декодировать base64
         try:
-            content = base64.b64decode(content).decode("utf-8")
-        except:
-            pass
+            decoded = base64.b64decode(raw).decode("utf-8")
+            print("Base64 успешно декодирован")
+        except Exception:
+            decoded = raw
+            print("Base64 НЕ применялся")
 
-        lines = content.splitlines()
-
-        print(f"{url} → строк: {len(lines)}")
+        lines = decoded.splitlines()
+        print("Строк после split:", len(lines))
 
         for line in lines:
             line = line.strip()
@@ -34,6 +41,8 @@ for url in URLS:
 
     except Exception as e:
         print("Ошибка:", e)
+
+print("Найдено серверов:", len(output))
 
 header = f"""#profile-title:RUKPOTовыеТОННЕЛИRu
 #subscription-userinfo: upload=0; download=0; total=0; expire=0
@@ -46,4 +55,4 @@ header = f"""#profile-title:RUKPOTовыеТОННЕЛИRu
 with open("Molestunnels.txt", "w", encoding="utf-8") as f:
     f.write(header + "\n".join(output))
 
-print("Готово. Добавлено серверов:", len(output))
+print("Готово.")
