@@ -1,124 +1,201 @@
-import socket
+import asyncio
+import aiohttp
 import base64
+import socket
 import re
+import time
+from urllib.parse import urlparse
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
+from zoneinfo import ZoneInfo
 
 INPUT_FILE = "sslist.txt"
-OUTPUT_TXT = "Molestunnels.txt"
-OUTPUT_BASE64 = "Molestunnels_base64.txt"
+OUTPUT_FILE = "Molestunnels.txt"
+BASE64_FILE = "Molestunnels_base64.txt"
 
-TIMEOUT = 3
-MAX_WORKERS = 100
+MAX_WORKING = 500
+CONCURRENCY = 300
+TIMEOUT = 1.5
 
-# -------------------------------
-# Проверка сервера
-# -------------------------------
-def check_server(link):
+
+# -------------------- FIXED HEADERS --------------------
+
+FIXED_HEADERS = [
+    "#profile-title:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
+    "#subscription-userinfo: upload=0; download=0; total=0; expire=0",
+    "#profile-update-interval: 1",
+    "#support-url:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
+    "#profile-web-page-url:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
+]
+
+
+# -------------------- EXTRACT VLESS --------------------
+
+def extract_vless(text):
+    return list(set(re.findall(r'vless://[^\s]+', text)))
+
+
+# -------------------- COUNTRY FLAG --------------------
+
+def country_to_flag(code):
+    if not code or len(code) != 2:
+        return "🌍"
+    return chr(ord(code[0].upper()) + 127397) + chr(ord(code[1].upper()) + 127397)
+
+
+async def fetch_country(session, ip):
     try:
-        match = re.search(r'@(.+?):(\d+)', link)
-        if not match:
+        url = f"http://ip-api.com/json/{ip}?fields=countryCode"
+        async with session.get(url, timeout=2) as resp:
+            data = await resp.json()
+            return country_to_flag(data.get("countryCode"))
+    except:
+        return "🌍"
+
+
+# -------------------- FETCH SOURCES --------------------
+
+async def fetch(session, url):
+    try:
+        async with session.get(url, timeout=TIMEOUT) as response:
+            return await response.text()
+    except:
+        return ""
+
+
+# -------------------- TCP CHECK --------------------
+
+async def check_once(host, port):
+    try:
+        start = time.perf_counter()
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port),
+            timeout=TIMEOUT
+        )
+        latency = (time.perf_counter() - start) * 1000
+        writer.close()
+        await writer.wait_closed()
+        return latency
+    except:
+        return None
+
+
+async def check_server(config, semaphore, session):
+    try:
+        parsed = urlparse(config)
+        host = parsed.hostname
+        port = parsed.port
+
+        if not host or not port:
             return None
 
-        host = match.group(1)
-        port = int(match.group(2))
+        async with semaphore:
+            first = await check_once(host, port)
+            if first is None:
+                return None
 
-        start = datetime.now()
-        sock = socket.create_connection((host, port), timeout=TIMEOUT)
-        latency = (datetime.now() - start).total_seconds()
-        sock.close()
+            await asyncio.sleep(0.3)
 
-        # Убираем Канаду
-        if "CA" in link.upper() or "CANADA" in link.upper():
-            return None
+            second = await check_once(host, port)
+            if second is None:
+                return None
 
-        return (link, latency)
+            avg_latency = (first + second) / 2
+
+            ip = host
+            try:
+                ip = socket.gethostbyname(host)
+            except:
+                pass
+
+            flag = await fetch_country(session, ip)
+
+            clean_config = config.split("#")[0]
+
+            return {
+                "config": clean_config,
+                "latency": avg_latency,
+                "flag": flag
+            }
 
     except:
         return None
 
-# -------------------------------
-# Читаем исходный список
-# -------------------------------
-with open(INPUT_FILE, "r", encoding="utf-8") as f:
-    links = [line.strip() for line in f if line.strip()]
 
-working = []
+# -------------------- MAIN --------------------
 
-with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-    results = executor.map(check_server, links)
+async def main():
+    print("Reading sources...")
 
-for result in results:
-    if result:
-        working.append(result)
+    try:
+        with open(INPUT_FILE, "r", encoding="utf-8") as f:
+            sources = [line.strip() for line in f if line.strip()]
+    except:
+        print("No sslist.txt found.")
+        return
 
-# Сортировка по скорости
-working.sort(key=lambda x: x[1])
+    moscow_time = datetime.now(ZoneInfo("Europe/Moscow"))
+    update_date = moscow_time.strftime("%d-%m-%Y")
 
-# -------------------------------
-# Формируем новые серверы
-# -------------------------------
-today = datetime.now().strftime("%d-%m-%Y")
-final_links = []
+    async with aiohttp.ClientSession() as session:
 
-for index, (link, latency) in enumerate(working, start=1):
-    number = str(index).zfill(3)
+        tasks = [fetch(session, url) for url in sources]
+        results = await asyncio.gather(*tasks)
 
-    flag_match = re.search(r'([\U0001F1E6-\U0001F1FF]{2})', link)
-    flag = flag_match.group(1) if flag_match else "🌍"
+        print("Extracting VLESS configs...")
 
-    new_name = f"{flag} СЕРВЕР {number} | ОБНОВЛЕН {today}"
+        all_configs = []
+        for text in results:
+            all_configs.extend(extract_vless(text))
 
-    base = link.split("#")[0]
-    final_links.append(f"{base}#{new_name}")
+        all_configs = list(set(all_configs))
 
-active_count = len(final_links)
-announce_line = f"#announce: 🚀 АКТИВНЫХ: {active_count} | 📅 {today}"
+        print(f"Total unique configs: {len(all_configs)}")
 
-# -------------------------------
-# Читаем старую шапку (всё до первой ss:// строки)
-# -------------------------------
-header_lines = []
+        semaphore = asyncio.Semaphore(CONCURRENCY)
 
-if os.path.exists(OUTPUT_TXT):
-    with open(OUTPUT_TXT, "r", encoding="utf-8") as f:
-        old_lines = f.readlines()
+        print("Checking servers...")
 
-    for line in old_lines:
-        if line.startswith("ss://"):
-            break
-        if not line.startswith("#announce"):
-            header_lines.append(line.strip())
+        tasks = [
+            check_server(cfg, semaphore, session)
+            for cfg in all_configs
+        ]
 
-# -------------------------------
-# Собираем финальный файл
-# -------------------------------
-subscription_content = []
+        checked = await asyncio.gather(*tasks)
 
-# возвращаем старую шапку
-subscription_content.extend(header_lines)
+    alive = [c for c in checked if c is not None]
 
-# добавляем новый announce
-subscription_content.append(announce_line)
+    if not alive:
+        print("No alive configs found.")
+        return
 
-# добавляем сервера
-subscription_content.extend(final_links)
+    alive.sort(key=lambda x: x["latency"])
+    alive = alive[:MAX_WORKING]
 
-subscription_text = "\n".join(subscription_content)
+    print(f"Selected fastest: {len(alive)}")
 
-# -------------------------------
-# Сохраняем TXT
-# -------------------------------
-with open(OUTPUT_TXT, "w", encoding="utf-8") as f:
-    f.write(subscription_text)
+    formatted = []
 
-# -------------------------------
-# Сохраняем BASE64
-# -------------------------------
-encoded = base64.b64encode(subscription_text.encode("utf-8")).decode("utf-8")
+    for idx, item in enumerate(alive, start=1):
+        formatted.append(
+            f'{item["config"]}#{item["flag"]} СЕРВЕР {idx:03d} | ОБНОВЛЕН {update_date}'
+        )
 
-with open(OUTPUT_BASE64, "w", encoding="utf-8") as f:
-    f.write(encoded)
+    announce_line = f"#announce: 🚀 ТОП {len(formatted)} САМЫХ БЫСТРЫХ | 📅 {update_date}"
 
-print("\nПодписка обновлена.")
-print(announce_line)
+    final_text = "\n".join(FIXED_HEADERS + [announce_line] + formatted)
+
+    print("Writing files...")
+
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        f.write(final_text)
+
+    base64_data = base64.b64encode(final_text.encode()).decode()
+
+    with open(BASE64_FILE, "w", encoding="utf-8") as f:
+        f.write(base64_data)
+
+    print("Done.")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
