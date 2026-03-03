@@ -1,32 +1,39 @@
-name: Run VLESS Checker
+name: Check Vless Servers
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '0 */6 * * *'   # каждые 6 часов (можно настроить)
+  workflow_dispatch:         # возможность запуска вручную
 
 jobs:
-  build:
+  generate:
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Install Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.10'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install requests
 
-      - name: Run script
-        run: python main.py
-
-      - name: Commit results
+      - name: Download Xray-core
         run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add url_work.txt
-          git commit -m "update results" || echo "no changes"
+          wget https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+          unzip Xray-linux-64.zip -d xray-core
+          chmod +x xray-core/xray
+          echo "$(pwd)/xray-core" >> $GITHUB_PATH   # добавляем в PATH
+
+      - name: Run GENERATOR.py
+        run: python GENERATOR.py
+
+      - name: Commit and push if subscription.txt changed
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add subscription.txt
+          git diff --quiet && git diff --staged --quiet || git commit -m "Auto-update subscription.txt"
           git push
