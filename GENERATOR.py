@@ -12,7 +12,7 @@ TIMEOUT = 3
 MAX_WORKERS = 100
 
 # -------------------------------
-# Проверка сервера на доступность
+# Проверка сервера
 # -------------------------------
 def check_server(link):
     try:
@@ -38,16 +38,11 @@ def check_server(link):
         return None
 
 # -------------------------------
-# Чтение исходного списка
+# Читаем исходный список
 # -------------------------------
 with open(INPUT_FILE, "r", encoding="utf-8") as f:
     links = [line.strip() for line in f if line.strip()]
 
-print(f"Всего серверов: {len(links)}")
-
-# -------------------------------
-# Проверка серверов
-# -------------------------------
 working = []
 
 with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -57,18 +52,11 @@ for result in results:
     if result:
         working.append(result)
 
-print(f"Рабочих серверов: {len(working)}")
+# Сортировка по скорости
+working.sort(key=lambda x: x[1])
 
 # -------------------------------
-# Умная сортировка (скорость + стабильность)
-# -------------------------------
-# Сейчас стабильность = факт прохождения проверки
-# Можно расширить позже до истории проверок
-
-working.sort(key=lambda x: x[1])  # сортировка по latency
-
-# -------------------------------
-# Формирование имен
+# Формируем новые серверы
 # -------------------------------
 today = datetime.now().strftime("%d-%m-%Y")
 final_links = []
@@ -76,41 +64,61 @@ final_links = []
 for index, (link, latency) in enumerate(working, start=1):
     number = str(index).zfill(3)
 
-    # Получаем флаг из названия (если есть emoji)
     flag_match = re.search(r'([\U0001F1E6-\U0001F1FF]{2})', link)
     flag = flag_match.group(1) if flag_match else "🌍"
 
     new_name = f"{flag} СЕРВЕР {number} | ОБНОВЛЕН {today}"
 
-    if "#" in link:
-        base = link.split("#")[0]
-    else:
-        base = link
-
+    base = link.split("#")[0]
     final_links.append(f"{base}#{new_name}")
 
-# -------------------------------
-# Формирование announce
-# -------------------------------
 active_count = len(final_links)
 announce_line = f"#announce: 🚀 АКТИВНЫХ: {active_count} | 📅 {today}"
 
-subscription_content = [announce_line] + final_links
+# -------------------------------
+# Читаем старую шапку (всё до первой ss:// строки)
+# -------------------------------
+header_lines = []
+
+if os.path.exists(OUTPUT_TXT):
+    with open(OUTPUT_TXT, "r", encoding="utf-8") as f:
+        old_lines = f.readlines()
+
+    for line in old_lines:
+        if line.startswith("ss://"):
+            break
+        if not line.startswith("#announce"):
+            header_lines.append(line.strip())
+
+# -------------------------------
+# Собираем финальный файл
+# -------------------------------
+subscription_content = []
+
+# возвращаем старую шапку
+subscription_content.extend(header_lines)
+
+# добавляем новый announce
+subscription_content.append(announce_line)
+
+# добавляем сервера
+subscription_content.extend(final_links)
+
 subscription_text = "\n".join(subscription_content)
 
 # -------------------------------
-# Сохранение TXT
+# Сохраняем TXT
 # -------------------------------
 with open(OUTPUT_TXT, "w", encoding="utf-8") as f:
     f.write(subscription_text)
 
 # -------------------------------
-# Сохранение BASE64
+# Сохраняем BASE64
 # -------------------------------
 encoded = base64.b64encode(subscription_text.encode("utf-8")).decode("utf-8")
 
 with open(OUTPUT_BASE64, "w", encoding="utf-8") as f:
     f.write(encoded)
 
-print("\n" + announce_line)
-print("Подписка успешно обновлена.")
+print("\nПодписка обновлена.")
+print(announce_line)
