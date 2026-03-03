@@ -27,6 +27,3 @@ https://gist.githubusercontent.com/sevushyamamoto-stack/9341be7a058e132154d407d0
 
 # HAPP
 https://raw.githubusercontent.com/EvenSide/Vless/refs/heads/main/Blacklist.txt
-
-# CID_VPN
-https://raw.githubusercontent.com/CidVpn/cid-vpn-config/refs/heads/main/general.txt
