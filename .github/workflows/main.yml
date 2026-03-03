@@ -2,9 +2,9 @@ name: Update VPN Subscription
 
 on:
   schedule:
-    # Запуск в 21:00 UTC (00:00 по МСК)
+    # Запуск в 00:00 по МСК (21:00 UTC)
     - cron: '0 21 * * *'
-  workflow_dispatch: # Позволяет запускать вручную
+  workflow_dispatch: # Кнопка для ручного запуска
 
 permissions:
   contents: write
@@ -25,7 +25,7 @@ jobs:
         run: pip install requests
 
       - name: Run script
-        # ВАЖНО: Запускаем именно GENERATOR.py
+        # ВАЖНО: запуск твоего файла
         run: python GENERATOR.py
 
       - name: Commit and Push
@@ -52,7 +52,7 @@ jobs:
           name: "🇷🇺 КРОТовыеТОННЕЛИ 🇷🇺"
           body: |
             📅 Обновлено (МСК): $(date -d '+3 hours' +'%d-%m-%Y %H:%M')
-            🚀 Самые быстрые 10% серверов помечены ракетами.
+            🚀 Топ-10% самых быстрых серверов помечены ракетами.
             🛰 Всего рабочих узлов: $(grep -c "://" subscription.txt || echo "0")
           env:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
