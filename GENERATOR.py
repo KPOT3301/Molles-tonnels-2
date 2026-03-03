@@ -54,7 +54,7 @@ TEST_URLS = [
 ]
 
 # Порог задержки (мс) – серверы с задержкой выше этого значения отбрасываются. 0 = отключено.
-MAX_LATENCY_MS = 800   # 0.8 секунды
+MAX_LATENCY_MS = 500   # 0.5 секунды
 
 # Режим только TCP (быстро, но менее точно)
 ONLY_TCP = False
@@ -386,16 +386,12 @@ def save_working_links(links):
 
         # Сами ссылки с нумерацией
         for idx, link in enumerate(links, start=1):
+            # Удаляем всё после символа '#' (включая его) – это убирает старые теги
+            link = re.sub(r'#.*$', '', link)
             # Формируем номер с ведущими нулями (0001, 0002, ...)
             server_num = f"{idx:04d}"
             tag = f"#СЕРВЕР {server_num} | ОБНОВЛЕН {today}"
-
-            # Удаляем существующий фрагмент (всё после #), если он есть
-            if '#' in link:
-                link = link.split('#')[0]
-            # Добавляем наш тег
-            link_with_tag = link + tag
-            f.write(link_with_tag + '\n')
+            f.write(link + tag + '\n')
 
     logging.info(f"💾 Сохранено {len(links)} рабочих ссылок в {OUTPUT_FILE} с заголовками и нумерацией.")
 
