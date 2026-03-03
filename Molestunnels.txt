@@ -1,3 +1,6 @@
 #profile-title:🇷🇺КРОТовыеТОННЕЛИ🇷🇺
+#subscription-userinfo: upload=0; download=0; total=0; expire=0
 #profile-update-interval: 1
-#announce: АКТИВНЫХ 0 | 03-03-2026
+#support-url:🇷🇺КРОТовыеТОННЕЛИ🇷🇺
+#profile-web-page-url:🇷🇺КРОТовыеТОННЕЛИ🇷🇺
+#announce: АКТИВНЫХ 0 | ОБНОВЛЕНО 03-03-2026
