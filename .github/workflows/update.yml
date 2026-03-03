@@ -12,6 +12,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0   # важно для pull --rebase
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -33,5 +35,12 @@ jobs:
 
           git add Molestunnels.txt Molestunnels_base64.txt
 
-          git diff --cached --quiet || git commit -m "Auto update tunnels"
-          git push
+          # Если нет изменений — выходим без ошибки
+          git diff --cached --quiet && exit 0
+
+          git commit -m "Auto update tunnels"
+
+          # Подтягиваем изменения если ветка обновилась
+          git pull --rebase origin main
+
+          git push origin main
