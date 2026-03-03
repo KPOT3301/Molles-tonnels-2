@@ -12,7 +12,7 @@ from urllib.parse import quote, urlparse
 # --- НАСТРОЙКИ ---
 INPUT_FILE = 'links.txt'
 OUTPUT_FILE = 'subscription.txt'
-# Прямая ссылка на правильную архитектуру для GitHub Actions (Linux x64)
+PLAIN_OUTPUT = 'links_plain.txt' # Файл для чистого списка без Base64
 CHECKER_URL = "https://github.com/nndrizhu/nodes-checker/releases/latest/download/nodes-checker-linux-amd64"
 CHECKER_PATH = "./nodes-checker"
 BATCH_SIZE = 100 
@@ -24,7 +24,6 @@ def download_checker():
         with open(CHECKER_PATH, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
-        # Установка прав на исполнение
         st = os.stat(CHECKER_PATH)
         os.chmod(CHECKER_PATH, st.st_mode | stat.S_IEXEC)
 
@@ -60,15 +59,12 @@ def rename_server(link, info, index):
     isp = info.get('isp', 'Unknown').split()[0].strip(',. ')
     num = str(index).zfill(4)
     date = datetime.datetime.now().strftime("%d-%m-%Y")
-    
     clean_name = f"[{flag}] {isp} | N{num} | {date}"
     
     if link.startswith('vless://'):
         safe_name = quote(clean_name)
-        # Удаляем старое имя и заменяем на новое
         base_part = link.split('#')[0] if '#' in link else link
         return f"{base_part}#{safe_name}"
-    
     elif link.startswith('vmess://'):
         try:
             v_data = json.loads(base64.b64decode(link[8:]).decode('utf-8'))
@@ -89,15 +85,12 @@ def main():
             try:
                 r = requests.get(url, timeout=10)
                 data = r.text
-                try: 
-                    # Пробуем декодировать если источник в Base64
-                    data = base64.b64decode(data.strip()).decode('utf-8')
+                try: data = base64.b64decode(data.strip()).decode('utf-8')
                 except: pass
                 
                 for line in data.splitlines():
                     line = line.strip()
                     if line.startswith(('vless://', 'vmess://')):
-                        # Дедупликация по адресу
                         key = line.split('#')[0]
                         if key not in raw_links_dict:
                             raw_links_dict[key] = line
@@ -107,12 +100,15 @@ def main():
         print("🛑 Ссылок не найдено.")
         return
 
-    # Запись временного файла для чекера
+    # --- НОВОЕ: Перезаписываем links_plain.txt уникальными сырыми ссылками ---
+    with open(PLAIN_OUTPUT, "w", encoding='utf-8') as f:
+        f.write("\n".join(raw_links_dict.values()))
+    print(f"📄 Файл {PLAIN_OUTPUT} успешно обновлен и очищен от дублей.")
+
     with open("temp.txt", "w", encoding='utf-8') as f:
         f.write("\n".join(raw_links_dict.values()))
 
     print(f"🚀 Запуск проверки YouTube для {len(raw_links_dict)} узлов...")
-    # Запуск чекера
     try:
         res = subprocess.run(
             [CHECKER_PATH, "-u", "https://www.youtube.com", "-f", "temp.txt", "--format", "json"],
@@ -125,10 +121,8 @@ def main():
 
     alive = sorted([n for n in checked_data if n.get('delay', 0) > 0], key=lambda x: x['delay'])
     
-    print(f"🌍 Получение инфо об IP для {len(alive)} живых серверов...")
     final = []
     idx = 1
-    
     for i in range(0, len(alive), BATCH_SIZE):
         chunk = alive[i:i+BATCH_SIZE]
         h_list = [parse_host(n['link']) for n in chunk]
@@ -143,6 +137,7 @@ def main():
         time.sleep(1.5)
 
     if final:
+        # Перезаписываем итоговую подписку (Base64)
         sub_content = "\n".join(final)
         encoded_sub = base64.b64encode(sub_content.encode('utf-8')).decode('utf-8')
         with open(OUTPUT_FILE, "w", encoding='utf-8') as f:
