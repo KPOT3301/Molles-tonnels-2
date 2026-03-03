@@ -6,15 +6,27 @@ import subprocess
 import tempfile
 import time
 from datetime import datetime
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlunparse
 from zoneinfo import ZoneInfo
 
 import requests
 
 XRAY_PATH = "./xray"
+MAX_WORKERS = 20
+TIMEOUT = 3
 
 
-# ================= DOWNLOAD SUBSCRIPTIONS =================
+# ================= 5 СТАТИЧНЫХ СТРОК =================
+STATIC_LINES = [
+    "#profile-title:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
+    "#subscription-userinfo: upload=0; download=0; total=0; expire=0",
+    "#profile-update-interval: 1",
+    "#support-url:🇷🇺КРОТовыеТОННЕЛИ🇷🇺",
+    "#profile-web-page-url:🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
+]
+
+
+# ================= DOWNLOAD =================
 def download_subscriptions():
     if not os.path.exists("sslist.txt"):
         return []
@@ -29,7 +41,6 @@ def download_subscriptions():
             r = requests.get(url, timeout=15)
             content = r.text.strip()
 
-            # если это base64
             try:
                 decoded = base64.b64decode(content).decode("utf-8")
                 content = decoded
@@ -37,9 +48,8 @@ def download_subscriptions():
                 pass
 
             for line in content.splitlines():
-                line = line.strip()
                 if line.startswith("vless://"):
-                    all_links.append(line)
+                    all_links.append(line.strip())
 
         except:
             continue
@@ -72,32 +82,16 @@ def parse_vless(link):
 
 
 def build_config(data):
-    stream = {
-        "network": data["network"],
-        "security": data["security"],
-    }
+    stream = {"network": data["network"], "security": data["security"]}
 
     if data["security"] == "tls":
-        stream["tlsSettings"] = {
-            "serverName": data["sni"] or data["host"]
-        }
+        stream["tlsSettings"] = {"serverName": data["sni"] or data["host"]}
 
     if data["security"] == "reality":
         stream["realitySettings"] = {
             "serverName": data["sni"],
             "publicKey": data["pbk"],
             "shortId": data["sid"] or ""
-        }
-
-    if data["network"] == "ws":
-        stream["wsSettings"] = {
-            "path": data["path"],
-            "headers": {"Host": data["host_header"]} if data["host_header"] else {}
-        }
-
-    if data["network"] == "grpc":
-        stream["grpcSettings"] = {
-            "serviceName": data["serviceName"]
         }
 
     outbound = {
@@ -121,13 +115,13 @@ def build_config(data):
         "inbounds": [{
             "port": 10808,
             "listen": "127.0.0.1",
-            "protocol": "socks",
-            "settings": {"udp": False}
+            "protocol": "socks"
         }],
         "outbounds": [outbound]
     }
 
 
+# ================= XRAY CHECK =================
 def xray_check(link):
     try:
         data = parse_vless(link)
@@ -143,7 +137,7 @@ def xray_check(link):
             stderr=subprocess.DEVNULL
         )
 
-        time.sleep(3)
+        time.sleep(TIMEOUT)
         alive = proc.poll() is None
 
         proc.kill()
@@ -155,42 +149,52 @@ def xray_check(link):
         return False
 
 
-async def check_vless(link):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, xray_check, link)
+async def bounded_check(sem, link):
+    async with sem:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, xray_check, link)
 
 
+# ================= MAIN =================
 async def main():
     links = download_subscriptions()
-    print("FOUND LINKS:", len(links))
+    print("Найдено:", len(links))
 
-    if not links:
-        write_files([])
-        return
-
-    tasks = [check_vless(link) for link in links]
+    sem = asyncio.Semaphore(MAX_WORKERS)
+    tasks = [bounded_check(sem, link) for link in links]
     results = await asyncio.gather(*tasks)
 
-    alive = [l for l, ok in zip(links, results) if ok]
+    alive_links = [l for l, ok in zip(links, results) if ok]
+    print("Рабочих:", len(alive_links))
 
-    print("ALIVE:", len(alive))
-    write_files(alive)
+    write_files(alive_links)
 
 
-def write_files(alive):
+# ================= WRITE FILE =================
+def rename_link(link, index, date_str):
+    parsed = urlparse(link)
+    new_name = f"СЕРВЕР {index:04d}| ОБНОВЛЕН {date_str}"
+    return urlunparse(parsed._replace(fragment=new_name))
+
+
+def write_files(alive_links):
     moscow = datetime.now(ZoneInfo("Europe/Moscow"))
     date_str = moscow.strftime("%d-%m-%Y")
 
-    announce = f"#announce: 🚀 РАБОЧИХ {len(alive)} | 📅 {date_str}"
+    renamed = [
+        rename_link(link, i + 1, date_str)
+        for i, link in enumerate(alive_links)
+    ]
+
+    announce = f"#announce: 🚀 АКТИВНЫХ {len(renamed)} | 📅 {date_str}"
+
+    lines = STATIC_LINES + [announce] + renamed
 
     with open("Molestunnels.txt", "w", encoding="utf-8") as f:
-        f.write(announce + "\n")
-        for link in alive:
-            f.write(link + "\n")
+        for line in lines:
+            f.write(line + "\n")
 
-    encoded = base64.b64encode(
-        ("\n".join([announce] + alive)).encode()
-    ).decode()
+    encoded = base64.b64encode("\n".join(lines).encode()).decode()
 
     with open("Molestunnels_base64.txt", "w", encoding="utf-8") as f:
         f.write(encoded)
