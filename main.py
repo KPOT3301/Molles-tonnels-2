@@ -2,13 +2,13 @@ import os, requests, base64, json, time, socket, datetime, concurrent.futures
 
 # --- НАСТРОЙКИ ---
 INPUT_FILE = 'links.txt'
-OUTPUT_FILE = 'subscription.txt'
+OUTPUT_FILE = 'subscription.txt'      # Кодированный (Base64)
+OUTPUT_PLAIN = 'links_plain.txt'       # Обычный текст
 BATCH_SIZE = 100
 CHECK_TIMEOUT = 5 
-MAX_WORKERS = 50 # Количество потоков для быстрой проверки
+MAX_WORKERS = 50 
 
 def parse_node(link):
-    """Извлекает хост и порт для проверки соединения"""
     try:
         if link.startswith('vless://'):
             part = link.split('@')[1].split('?')[0].split('#')[0]
@@ -20,7 +20,6 @@ def parse_node(link):
     except: return None, None
 
 def check_server(link):
-    """Проверяет TCP порт и замеряет задержку"""
     host, port = parse_node(link)
     if not host or not port: return None
     start_time = time.time()
@@ -31,7 +30,6 @@ def check_server(link):
     except: return None
 
 def get_batch_ip_info(hosts):
-    """Получает гео-данные через Batch API"""
     if not hosts: return {}
     try:
         unique_ips = list(set(hosts))[:100]
@@ -41,7 +39,6 @@ def get_batch_ip_info(hosts):
     except: return {}
 
 def rename_server(link, info, index):
-    """Формат: [КодСтраны] Провайдер | №0001 | 03-03-2026"""
     flag = info.get('countryCode', 'UN')
     isp = info.get('isp', 'Unknown').split()[0].strip(',.')
     num = str(index).zfill(4)
@@ -62,7 +59,7 @@ def main():
     print(f"🚀 Старт: {datetime.datetime.now()}")
     raw_links = {}
     
-    # 1. Сбор и мгновенная дедупликация
+    # 1. Сбор и дедупликация
     if os.path.exists(INPUT_FILE):
         with open(INPUT_FILE, 'r') as f:
             sources = [l.strip() for l in f if l.strip() and not l.startswith('#')]
@@ -77,7 +74,7 @@ def main():
                         raw_links[line.strip().split('#')[0]] = line.strip()
             except: continue
 
-    # 2. Многопоточная проверка скорости
+    # 2. Проверка
     alive_nodes = []
     if raw_links:
         print(f"📡 Проверка {len(raw_links)} серверов...")
@@ -97,11 +94,19 @@ def main():
                     final_list.append(rename_server(n['link'], info, len(final_list) + 1))
             time.sleep(1)
 
-    # 4. Сохранение (всегда перезаписывает файл)
-    content = base64.b64encode("\n".join(final_list).encode('utf-8')).decode('utf-8') if final_list else ""
-    with open(OUTPUT_FILE, "w") as f:
-        f.write(content)
-    print(f"✨ Готово! Рабочих серверов: {len(final_list)}")
+    # 4. Сохранение ОБОИХ файлов
+    plain_content = "\n".join(final_list)
+    
+    # Файл 1: Обычный текст
+    with open(OUTPUT_PLAIN, "w", encoding='utf-8') as f:
+        f.write(plain_content)
+        
+    # Файл 2: Base64
+    base64_content = base64.b64encode(plain_content.encode('utf-8')).decode('utf-8') if final_list else ""
+    with open(OUTPUT_FILE, "w", encoding='utf-8') as f:
+        f.write(base64_content)
+        
+    print(f"✨ Готово! Сохранено серверов: {len(final_list)}")
 
 if __name__ == "__main__":
     main()
