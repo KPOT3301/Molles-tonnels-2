@@ -16,11 +16,13 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
+          pip install --upgrade pip
           pip install -r requirements.txt
-          pip install geoip2   # добавлено
+          pip install geoip2   # на случай, если в requirements.txt нет
 
       - name: Download Xray-core
         run: |
@@ -29,13 +31,20 @@ jobs:
           chmod +x xray-core/xray
           echo "$(pwd)/xray-core" >> $GITHUB_PATH
 
+      - name: Verify Xray installation
+        run: xray --version
+
       - name: Run GENERATOR.py
         run: python GENERATOR.py
 
-      - name: Commit and push if subscription.txt changed
+      - name: Commit and push changes
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add subscription.txt
-          git diff --quiet && git diff --staged --quiet || git commit -m "Auto-update subscription.txt"
-          git push
+          git add subscription.txt subscription_base64.txt
+          if ! git diff --quiet && git diff --staged --quiet; then
+            git commit -m "Auto-update subscription files"
+            git push
+          else
+            echo "No changes to commit"
+          fi
