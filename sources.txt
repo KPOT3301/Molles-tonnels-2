@@ -22,3 +22,5 @@ https://gist.githubusercontent.com/sevushyamamoto-stack/9341be7a058e132154d407d0
 https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt
 #Подписка для ЧС 
 https://vpnd.io/subscription/vless/ba802473859338c0571a13d2c974a826b52b54e0ad29d37ab9e982a90d2f6489
+#РОСТУНЕЛЬ
+https://subrostunnel.vercel.app/std.txt
