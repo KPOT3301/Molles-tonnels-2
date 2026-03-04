@@ -404,18 +404,37 @@ def save_working_links(links):
             tag = f"#СЕРВЕР {server_num} | ОБНОВЛЕН {today}"
         lines.append(link_clean + tag)
 
-    # Запись обычного файла
     content = '\n'.join(lines) + '\n'
-    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        f.write(content)
-    logging.info(f"💾 Сохранено {len(links)} ссылок в {OUTPUT_FILE}")
 
-    # Запись base64
-    content_bytes = content.encode('utf-8')
-    encoded = base64.b64encode(content_bytes).decode('ascii')
-    with open(OUTPUT_BASE64_FILE, 'w', encoding='ascii') as f:
-        f.write(encoded)
-    logging.info(f"💾 Сохранена Base64-версия в {OUTPUT_BASE64_FILE} (размер: {len(encoded)} символов)")
+    # Запись обычного файла
+    try:
+        with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
+            f.write(content)
+        logging.info(f"✅ {OUTPUT_FILE} записан, размер: {len(content)} байт")
+    except Exception as e:
+        logging.error(f"❌ Ошибка записи {OUTPUT_FILE}: {e}")
+        return
+
+    # Создание base64
+    try:
+        content_bytes = content.encode('utf-8')
+        encoded = base64.b64encode(content_bytes)
+        if not encoded:
+            logging.error("❌ Base64 кодирование вернуло пустые данные!")
+            return
+        # Запись в бинарном режиме
+        with open(OUTPUT_BASE64_FILE, 'wb') as f:
+            f.write(encoded)
+        logging.info(f"✅ {OUTPUT_BASE64_FILE} записан, размер: {len(encoded)} байт")
+        # Проверим, что можно прочитать обратно
+        with open(OUTPUT_BASE64_FILE, 'rb') as f:
+            back = f.read()
+        if back != encoded:
+            logging.error("❌ Прочитанные данные не совпадают с записанными!")
+        else:
+            logging.info("✅ Проверка чтения base64 прошла успешно")
+    except Exception as e:
+        logging.error(f"❌ Ошибка при работе с base64: {e}")
 
 def check_xray_available():
     try:
@@ -449,4 +468,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
