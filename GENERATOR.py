@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GENERATOR.py – Максимально быстрая проверка Vless серверов + флаги стран (эмодзи)
+# GENERATOR.py – Проверка Vless серверов + флаги стран (эмодзи)
 
 import re
 import socket
@@ -23,12 +23,12 @@ try:
     GEOIP_AVAILABLE = True
 except ImportError:
     GEOIP_AVAILABLE = False
-    logging.warning("⚠️ Библиотека 'geoip2' не установлена. Флаги стран не будут добавлены. Установите: pip install geoip2")
+    logging.warning("⚠️ Библиотека 'geoip2' не установлена. Флаги стран не будут добавлены.")
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# ---------- Константы для оформления подписки ----------
+# ---------- Константы оформления подписки ----------
 PROFILE_TITLE = "🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
 SUPPORT_URL = "🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
 PROFILE_WEB_PAGE_URL = "🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
@@ -40,19 +40,16 @@ SOURCES_FILE = "sources.txt"
 OUTPUT_FILE = "subscription.txt"
 OUTPUT_BASE64_FILE = "subscription_base64.txt"
 REQUEST_TIMEOUT = 10
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 XRAY_CORE_PATH = "xray"
 
-# Ускоренная TCP-проверка
 TCP_CHECK_TIMEOUT = 2
 TCP_MAX_WORKERS = 400
 
-# Реальная проверка
 SOCKS_PORT = 8080
 REAL_CHECK_TIMEOUT = 12
 REAL_CHECK_CONCURRENCY = 9
 XRAY_STARTUP_DELAY = 2
-RETRY_COUNT = 0
 
 TEST_URLS = [
     "http://connectivitycheck.gstatic.com/generate_204",
@@ -84,7 +81,6 @@ def ensure_geoip_db():
         logging.error(f"❌ Не удалось скачать базу GeoIP: {e}")
         return False
 
-# Инициализация reader'а GeoIP
 reader = None
 if ensure_geoip_db():
     try:
@@ -94,14 +90,13 @@ if ensure_geoip_db():
         reader = None
 
 def get_country_flag(ip):
-    """Возвращает эмодзи-флаг по IP (или пустую строку)."""
+    """Возвращает эмодзи-флаг по IP."""
     if reader is None:
         return ""
     try:
         response = reader.country(ip)
         country_code = response.country.iso_code
         if country_code:
-            # Конвертируем код (RU, US) в региональные символы 🇷🇺, 🇺🇸
             return ''.join(chr(127397 + ord(c)) for c in country_code.upper())
     except Exception:
         pass
@@ -110,7 +105,6 @@ def get_country_flag(ip):
 # ---------- Вспомогательные функции ----------
 @lru_cache(maxsize=256)
 def resolve_host(host):
-    """Кэширует IP-адрес по имени хоста."""
     return socket.gethostbyname(host)
 
 def read_sources():
@@ -214,42 +208,30 @@ def parse_vless_link(link):
 def create_xray_config(vless_config):
     config = {
         "log": {"loglevel": "error"},
-        "inbounds": [
-            {
-                "port": SOCKS_PORT,
-                "listen": "127.0.0.1",
-                "protocol": "socks",
-                "settings": {
-                    "auth": "noauth",
-                    "udp": True,
-                    "ip": "127.0.0.1"
-                }
+        "inbounds": [{
+            "port": SOCKS_PORT,
+            "listen": "127.0.0.1",
+            "protocol": "socks",
+            "settings": {"auth": "noauth", "udp": True, "ip": "127.0.0.1"}
+        }],
+        "outbounds": [{
+            "protocol": "vless",
+            "settings": {
+                "vnext": [{
+                    "address": vless_config['host'],
+                    "port": vless_config['port'],
+                    "users": [{
+                        "id": vless_config['uuid'],
+                        "encryption": vless_config['encryption'],
+                        "flow": vless_config['flow']
+                    }]
+                }]
+            },
+            "streamSettings": {
+                "network": vless_config['type'],
+                "security": vless_config['security']
             }
-        ],
-        "outbounds": [
-            {
-                "protocol": "vless",
-                "settings": {
-                    "vnext": [
-                        {
-                            "address": vless_config['host'],
-                            "port": vless_config['port'],
-                            "users": [
-                                {
-                                    "id": vless_config['uuid'],
-                                    "encryption": vless_config['encryption'],
-                                    "flow": vless_config['flow']
-                                }
-                            ]
-                        }
-                    ]
-                },
-                "streamSettings": {
-                    "network": vless_config['type'],
-                    "security": vless_config['security']
-                }
-            }
-        ]
+        }]
     }
 
     stream = config["outbounds"][0]["streamSettings"]
@@ -272,9 +254,7 @@ def create_xray_config(vless_config):
     if vless_config['type'] == 'ws':
         stream["wsSettings"] = {
             "path": vless_config['path'],
-            "headers": {
-                "Host": vless_config['host_header']
-            }
+            "headers": {"Host": vless_config['host_header']}
         }
 
     return config
@@ -309,11 +289,8 @@ def check_vless_real(link):
     try:
         process = subprocess.Popen(
             [XRAY_CORE_PATH, 'run', '-config', config_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
-
         time.sleep(XRAY_STARTUP_DELAY)
 
         proxies = {
@@ -332,13 +309,10 @@ def check_vless_real(link):
                     allow_redirects=False
                 )
                 latency = int((time.time() - start_time) * 1000)
-
                 if response.status_code == 204:
                     return (link, True, latency)
-                else:
-                    logging.debug(f"URL {test_url} вернул {response.status_code}")
-            except requests.exceptions.RequestException as e:
-                logging.debug(f"Попытка для {test_url} не удалась: {e}")
+            except requests.exceptions.RequestException:
+                continue
 
         return (link, False, None)
 
@@ -357,9 +331,7 @@ def check_vless_real(link):
 
 def filter_working_links(links):
     total = len(links)
-
-    # Этап 1: TCP-проверка
-    logging.info(f"🌐 Этап 1: TCP-проверка {total} ссылок (параллельность {TCP_MAX_WORKERS}, таймаут {TCP_CHECK_TIMEOUT}с)...")
+    logging.info(f"🌐 Этап 1: TCP-проверка {total} ссылок...")
     tcp_ok = []
     with ThreadPoolExecutor(max_workers=TCP_MAX_WORKERS) as executor:
         future_to_link = {executor.submit(check_tcp, link): link for link in links}
@@ -373,14 +345,10 @@ def filter_working_links(links):
 
     logging.info(f"📊 TCP-проверка завершена. Прошли: {len(tcp_ok)}/{total}")
 
-    if ONLY_TCP:
+    if ONLY_TCP or not tcp_ok:
         return tcp_ok
 
-    if not tcp_ok:
-        return []
-
-    # Этап 2: реальная проверка
-    logging.info(f"🧪 Этап 2: Реальная проверка {len(tcp_ok)} ссылок через Xray-core (порт {SOCKS_PORT}, параллельность {REAL_CHECK_CONCURRENCY})...")
+    logging.info(f"🧪 Этап 2: Реальная проверка {len(tcp_ok)} ссылок...")
     working_real = []
     too_slow = 0
     with ThreadPoolExecutor(max_workers=REAL_CHECK_CONCURRENCY) as executor:
@@ -390,75 +358,64 @@ def filter_working_links(links):
             if is_working:
                 if MAX_LATENCY_MS > 0 and latency > MAX_LATENCY_MS:
                     too_slow += 1
-                    logging.info(f"⚠️ [{i}/{len(tcp_ok)}] Слишком медленный (latency: {latency}ms > {MAX_LATENCY_MS}ms): {link[:80]}...")
+                    logging.info(f"⚠️ [{i}/{len(tcp_ok)}] Слишком медленный ({latency}ms)")
                 else:
                     working_real.append(link)
-                    logging.info(f"✅ [{i}/{len(tcp_ok)}] Работает (latency: {latency}ms): {link[:80]}...")
+                    logging.info(f"✅ [{i}/{len(tcp_ok)}] Работает ({latency}ms)")
             else:
-                logging.info(f"❌ [{i}/{len(tcp_ok)}] Не работает: {link[:80]}...")
+                logging.info(f"❌ [{i}/{len(tcp_ok)}] Не работает")
 
-    if MAX_LATENCY_MS > 0 and too_slow > 0:
-        logging.info(f"⚠️ Отсеяно по скорости: {too_slow} серверов с latency > {MAX_LATENCY_MS}ms")
+    if too_slow:
+        logging.info(f"⚠️ Отсеяно по скорости: {too_slow} серверов")
 
     return working_real
 
 def save_working_links(links):
     """
-    Сохраняет рабочие ссылки в subscription.txt с красивыми заголовками.
-    Каждая ссылка получает тег с номером, флагом страны и датой.
+    Формирует содержимое подписки и сразу записывает оба файла:
+    subscription.txt (обычный текст) и subscription_base64.txt (base64).
     """
     today = datetime.now().strftime("%d-%m-%Y")
+    lines = []
+
+    # Заголовки
+    lines.append(f"#profile-title:{PROFILE_TITLE}")
+    lines.append(f"#subscription-userinfo:{SUBSCRIPTION_USERINFO}")
+    lines.append(f"#profile-update-interval:{PROFILE_UPDATE_INTERVAL}")
+    lines.append(f"#support-url:{SUPPORT_URL}")
+    lines.append(f"#profile-web-page-url:{PROFILE_WEB_PAGE_URL}")
+    lines.append(f"#announce: АКТИВНЫХ СЕРВЕРОВ 🚀 {len(links)} | ОБНОВЛЕНО 📅 {today}")
+
+    # Ссылки
+    for idx, link in enumerate(links, start=1):
+        link_clean = re.sub(r'#.*$', '', link)
+        server_num = f"{idx:04d}"
+        flag = ""
+        config = parse_vless_link(link_clean)
+        if config:
+            try:
+                ip = resolve_host(config['host'])
+                flag = get_country_flag(ip)
+            except Exception:
+                pass
+        if flag:
+            tag = f"#СЕРВЕР {server_num} | {flag} | ОБНОВЛЕН {today}"
+        else:
+            tag = f"#СЕРВЕР {server_num} | ОБНОВЛЕН {today}"
+        lines.append(link_clean + tag)
+
+    # Запись обычного файла
+    content = '\n'.join(lines) + '\n'
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        # Заголовки подписки
-        f.write(f"#profile-title:{PROFILE_TITLE}\n")
-        f.write(f"#subscription-userinfo:{SUBSCRIPTION_USERINFO}\n")
-        f.write(f"#profile-update-interval:{PROFILE_UPDATE_INTERVAL}\n")
-        f.write(f"#support-url:{SUPPORT_URL}\n")
-        f.write(f"#profile-web-page-url:{PROFILE_WEB_PAGE_URL}\n")
-        # Аннонс с эмодзи
-        f.write(f"#announce: АКТИВНЫХ СЕРВЕРОВ 🚀 {len(links)} | ОБНОВЛЕНО 📅 {today}\n")
+        f.write(content)
+    logging.info(f"💾 Сохранено {len(links)} ссылок в {OUTPUT_FILE}")
 
-        # Сами ссылки с нумерацией и флагами
-        for idx, link in enumerate(links, start=1):
-            # Удаляем старые теги
-            link = re.sub(r'#.*$', '', link)
-            server_num = f"{idx:04d}"
-
-            # Определяем флаг страны
-            flag = ""
-            config = parse_vless_link(link)
-            if config:
-                try:
-                    ip = resolve_host(config['host'])
-                    flag = get_country_flag(ip)
-                except Exception:
-                    pass
-
-            # Формируем тег
-            if flag:
-                tag = f"#СЕРВЕР {server_num} | {flag} | ОБНОВЛЕН {today}"
-            else:
-                tag = f"#СЕРВЕР {server_num} | ОБНОВЛЕН {today}"
-
-            f.write(link + tag + '\n')
-
-    logging.info(f"💾 Сохранено {len(links)} рабочих ссылок в {OUTPUT_FILE} с заголовками и нумерацией.")
-
-def create_base64_subscription():
-    """Создаёт Base64-версию подписки (всегда, даже если subscription.txt пуст)."""
-    try:
-        # Небольшая задержка для гарантии, что файл полностью записан на диск
-        time.sleep(0.5)
-        with open(OUTPUT_FILE, 'rb') as f:
-            content = f.read()
-        if not content:
-            logging.warning(f"⚠️ Файл {OUTPUT_FILE} пуст, Base64 будет пустым или содержать только заголовки.")
-        encoded = base64.b64encode(content).decode('ascii')
-        with open(OUTPUT_BASE64_FILE, 'w', encoding='ascii') as f:
-            f.write(encoded)
-        logging.info(f"💾 Сохранена Base64-версия подписки в {OUTPUT_BASE64_FILE} (размер: {len(encoded)} символов)")
-    except Exception as e:
-        logging.error(f"❌ Ошибка при создании Base64-версии: {e}")
+    # Запись base64
+    content_bytes = content.encode('utf-8')
+    encoded = base64.b64encode(content_bytes).decode('ascii')
+    with open(OUTPUT_BASE64_FILE, 'w', encoding='ascii') as f:
+        f.write(encoded)
+    logging.info(f"💾 Сохранена Base64-версия в {OUTPUT_BASE64_FILE} (размер: {len(encoded)} символов)")
 
 def check_xray_available():
     try:
@@ -466,15 +423,11 @@ def check_xray_available():
         if result.returncode == 0:
             logging.info(f"✅ Xray-core найден: {result.stdout.splitlines()[0]}")
             return True
-        else:
-            logging.warning("⚠️ Xray-core не отвечает")
-            return False
     except FileNotFoundError:
         logging.error(f"❌ Xray-core не найден по пути '{XRAY_CORE_PATH}'")
-        return False
     except Exception as e:
         logging.error(f"❌ Ошибка при проверке Xray-core: {e}")
-        return False
+    return False
 
 def main():
     if not check_xray_available():
@@ -492,10 +445,8 @@ def main():
     working_links = filter_working_links(all_links)
     save_working_links(working_links)
 
-    # Всегда создаём Base64-версию, даже если нет рабочих ссылок
-    create_base64_subscription()
-
     logging.info(f"📊 Итог: {len(working_links)} рабочих из {len(all_links)} проверенных")
 
 if __name__ == "__main__":
     main()
+    
