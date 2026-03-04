@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GENERATOR.py – Полностью автоматическая проверка Vless серверов с красивым оформлением подписки и нумерацией серверов
+# GENERATOR.py – Максимально быстрая проверка Vless серверов (финальная версия)
 
 import re
 import socket
@@ -29,32 +29,30 @@ SUBSCRIPTION_USERINFO = "upload=0; download=0; total=0; expire=0"
 # ---------- Основные константы ----------
 SOURCES_FILE = "sources.txt"
 OUTPUT_FILE = "subscription.txt"
+OUTPUT_BASE64_FILE = "subscription_base64.txt"
 REQUEST_TIMEOUT = 10
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 XRAY_CORE_PATH = "xray"
 
-# TCP-проверка
-TCP_CHECK_TIMEOUT = 2
-TCP_MAX_WORKERS = 300
+# Ускоренная TCP-проверка (ещё больше потоков)
+TCP_CHECK_TIMEOUT = 2           # оставим 2 секунды
+TCP_MAX_WORKERS = 400            # увеличили с 300 до 400
 
-# Реальная проверка
+# Реальная проверка (уменьшенные таймауты и убраны повторные попытки)
 SOCKS_PORT = 8080
-REAL_CHECK_TIMEOUT = 15
-REAL_CHECK_CONCURRENCY = 9
-XRAY_STARTUP_DELAY = 3
-RETRY_COUNT = 1
+REAL_CHECK_TIMEOUT = 12          # уменьшили с 15 до 12
+REAL_CHECK_CONCURRENCY = 9       # оставляем 9 (максимум для стабильности)
+XRAY_STARTUP_DELAY = 2            # уменьшили с 3 до 2
+RETRY_COUNT = 0                    # убрали повторные попытки (было 1)
 
-# Тестовые URL
+# Сокращённый список тестовых URL (только самые быстрые и надёжные)
 TEST_URLS = [
     "http://connectivitycheck.gstatic.com/generate_204",
-    "https://connectivitycheck.gstatic.com/generate_204",
-    "http://cp.cloudflare.com/generate_204",
-    "http://www.gstatic.com/generate_204",
-    "http://www.google.com/generate_204"
+    "http://cp.cloudflare.com/generate_204"
 ]
 
 # Порог задержки (мс) – серверы с задержкой выше этого значения отбрасываются. 0 = отключено.
-MAX_LATENCY_MS = 700   # 0.7 секунды
+MAX_LATENCY_MS = 500   # 0.5 секунды
 
 # Режим только TCP (быстро, но менее точно)
 ONLY_TCP = False
@@ -281,25 +279,24 @@ def check_vless_real(link):
         }
 
         for test_url in TEST_URLS:
-            for attempt in range(RETRY_COUNT + 1):
-                try:
-                    start_time = time.time()
-                    response = requests.get(
-                        test_url,
-                        proxies=proxies,
-                        timeout=REAL_CHECK_TIMEOUT,
-                        headers={'User-Agent': USER_AGENT},
-                        allow_redirects=False
-                    )
-                    latency = int((time.time() - start_time) * 1000)
+            try:
+                start_time = time.time()
+                response = requests.get(
+                    test_url,
+                    proxies=proxies,
+                    timeout=REAL_CHECK_TIMEOUT,
+                    headers={'User-Agent': USER_AGENT},
+                    allow_redirects=False
+                )
+                latency = int((time.time() - start_time) * 1000)
 
-                    if response.status_code == 204:
-                        return (link, True, latency)
-                    else:
-                        logging.debug(f"URL {test_url} вернул {response.status_code}")
-                except requests.exceptions.RequestException as e:
-                    logging.debug(f"Попытка {attempt+1} для {test_url} не удалась: {e}")
-                    time.sleep(1)
+                if response.status_code == 204:
+                    return (link, True, latency)
+                else:
+                    logging.debug(f"URL {test_url} вернул {response.status_code}")
+            except requests.exceptions.RequestException as e:
+                logging.debug(f"Попытка для {test_url} не удалась: {e}")
+                # продолжаем со следующим URL
 
         if process:
             stdout, stderr = process.communicate(timeout=5)
@@ -395,6 +392,20 @@ def save_working_links(links):
 
     logging.info(f"💾 Сохранено {len(links)} рабочих ссылок в {OUTPUT_FILE} с заголовками и нумерацией.")
 
+def create_base64_subscription():
+    """
+    Читает обычный файл подписки и создаёт его Base64-версию.
+    """
+    try:
+        with open(OUTPUT_FILE, 'rb') as f:
+            content = f.read()
+        encoded = base64.b64encode(content).decode('ascii')
+        with open(OUTPUT_BASE64_FILE, 'w', encoding='ascii') as f:
+            f.write(encoded)
+        logging.info(f"💾 Сохранена Base64-версия подписки в {OUTPUT_BASE64_FILE}")
+    except Exception as e:
+        logging.error(f"❌ Ошибка при создании Base64-версии: {e}")
+
 def check_xray_available():
     try:
         result = subprocess.run([XRAY_CORE_PATH, '--version'], capture_output=True, text=True, timeout=5)
@@ -426,6 +437,12 @@ def main():
 
     working_links = filter_working_links(all_links)
     save_working_links(working_links)
+
+    # Создаём Base64-версию подписки
+    if working_links:
+        create_base64_subscription()
+    else:
+        logging.warning("Нет рабочих ссылок – Base64-версия не создана.")
 
     logging.info(f"📊 Итог: {len(working_links)} рабочих из {len(all_links)} проверенных")
 
