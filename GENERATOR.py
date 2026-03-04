@@ -445,14 +445,18 @@ def save_working_links(links):
     logging.info(f"💾 Сохранено {len(links)} рабочих ссылок в {OUTPUT_FILE} с заголовками и нумерацией.")
 
 def create_base64_subscription():
-    """Создаёт Base64-версию подписки."""
+    """Создаёт Base64-версию подписки (всегда, даже если subscription.txt пуст)."""
     try:
+        # Небольшая задержка для гарантии, что файл полностью записан на диск
+        time.sleep(0.5)
         with open(OUTPUT_FILE, 'rb') as f:
             content = f.read()
+        if not content:
+            logging.warning(f"⚠️ Файл {OUTPUT_FILE} пуст, Base64 будет пустым или содержать только заголовки.")
         encoded = base64.b64encode(content).decode('ascii')
         with open(OUTPUT_BASE64_FILE, 'w', encoding='ascii') as f:
             f.write(encoded)
-        logging.info(f"💾 Сохранена Base64-версия подписки в {OUTPUT_BASE64_FILE}")
+        logging.info(f"💾 Сохранена Base64-версия подписки в {OUTPUT_BASE64_FILE} (размер: {len(encoded)} символов)")
     except Exception as e:
         logging.error(f"❌ Ошибка при создании Base64-версии: {e}")
 
@@ -488,10 +492,8 @@ def main():
     working_links = filter_working_links(all_links)
     save_working_links(working_links)
 
-    if working_links:
-        create_base64_subscription()
-    else:
-        logging.warning("Нет рабочих ссылок – Base64-версия не создана.")
+    # Всегда создаём Base64-версию, даже если нет рабочих ссылок
+    create_base64_subscription()
 
     logging.info(f"📊 Итог: {len(working_links)} рабочих из {len(all_links)} проверенных")
 
