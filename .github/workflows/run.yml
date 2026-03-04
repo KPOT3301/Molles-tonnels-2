@@ -39,13 +39,17 @@ jobs:
       - name: Run GENERATOR.py
         run: python GENERATOR.py
 
-      # Опционально: проверить размеры созданных файлов
-      - name: Check output files
+      # Отладочный вывод содержимого файлов
+      - name: Show output files
         run: |
-          ls -la subscription.txt subscription_base64.txt
-          echo "=== Первые 100 символов subscription_base64.txt ==="
-          head -c 100 subscription_base64.txt
+          echo "=== subscription.txt (первые 500 символов) ==="
+          head -c 500 subscription.txt
           echo ""
+          echo "=== subscription_base64.txt (первые 500 символов) ==="
+          head -c 500 subscription_base64.txt
+          echo ""
+          echo "=== Размеры файлов ==="
+          wc -c subscription.txt subscription_base64.txt
 
       - name: Commit and push changes
         run: |
