@@ -3,11 +3,12 @@ name: Check Vless Servers
 on:
   schedule:
     - cron: '0 21 * * *'   # 21:00 UTC = 00:00 MSK (следующего дня)
-  workflow_dispatch:
+  workflow_dispatch:        # возможность ручного запуска
 
 jobs:
   generate:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -16,13 +17,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          cache: 'pip'
+          cache: 'pip'      # кэширование зависимостей для ускорения
 
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install geoip2   # на случай, если в requirements.txt нет
+          # гарантированно устанавливаем geoip2 (если нет в requirements.txt)
+          pip install geoip2
 
       - name: Download Xray-core
         run: |
@@ -36,6 +38,14 @@ jobs:
 
       - name: Run GENERATOR.py
         run: python GENERATOR.py
+
+      # Опционально: проверить размеры созданных файлов
+      - name: Check output files
+        run: |
+          ls -la subscription.txt subscription_base64.txt
+          echo "=== Первые 100 символов subscription_base64.txt ==="
+          head -c 100 subscription_base64.txt
+          echo ""
 
       - name: Commit and push changes
         run: |
