@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GENERATOR.py – Максимально быстрая проверка Vless серверов (финальная версия)
+# GENERATOR.py – Максимально быстрая проверка Vless серверов + флаги стран (эмодзи)
 
 import re
 import socket
@@ -14,7 +14,16 @@ from urllib.parse import urlparse, parse_qs
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 from datetime import datetime
+
 import requests
+
+# Попытка импорта geoip2 (для флагов стран)
+try:
+    import geoip2.database
+    GEOIP_AVAILABLE = True
+except ImportError:
+    GEOIP_AVAILABLE = False
+    logging.warning("⚠️ Библиотека 'geoip2' не установлена. Флаги стран не будут добавлены. Установите: pip install geoip2")
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -34,29 +43,71 @@ REQUEST_TIMEOUT = 10
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 XRAY_CORE_PATH = "xray"
 
-# Ускоренная TCP-проверка (ещё больше потоков)
-TCP_CHECK_TIMEOUT = 2           # оставим 2 секунды
-TCP_MAX_WORKERS = 400            # увеличили с 300 до 400
+# Ускоренная TCP-проверка
+TCP_CHECK_TIMEOUT = 2
+TCP_MAX_WORKERS = 400
 
-# Реальная проверка (уменьшенные таймауты и убраны повторные попытки)
+# Реальная проверка
 SOCKS_PORT = 8080
-REAL_CHECK_TIMEOUT = 12          # уменьшили с 15 до 12
-REAL_CHECK_CONCURRENCY = 9       # оставляем 9 (максимум для стабильности)
-XRAY_STARTUP_DELAY = 2            # уменьшили с 3 до 2
-RETRY_COUNT = 0                    # убрали повторные попытки (было 1)
+REAL_CHECK_TIMEOUT = 12
+REAL_CHECK_CONCURRENCY = 9
+XRAY_STARTUP_DELAY = 2
+RETRY_COUNT = 0
 
-# Сокращённый список тестовых URL (только самые быстрые и надёжные)
 TEST_URLS = [
     "http://connectivitycheck.gstatic.com/generate_204",
     "http://cp.cloudflare.com/generate_204"
 ]
 
-# Порог задержки (мс) – серверы с задержкой выше этого значения отбрасываются. 0 = отключено.
 MAX_LATENCY_MS = 500   # 0.5 секунды
-
-# Режим только TCP (быстро, но менее точно)
 ONLY_TCP = False
 
+# ---------- GeoIP ----------
+GEOIP_DB_PATH = "GeoLite2-Country.mmdb"
+GEOIP_DB_URL = "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-Country.mmdb"
+
+def ensure_geoip_db():
+    """Скачивает базу GeoIP, если её нет."""
+    if not GEOIP_AVAILABLE:
+        return False
+    if os.path.exists(GEOIP_DB_PATH):
+        return True
+    logging.info("🌍 База GeoIP не найдена. Пытаемся скачать...")
+    try:
+        r = requests.get(GEOIP_DB_URL, timeout=30)
+        r.raise_for_status()
+        with open(GEOIP_DB_PATH, 'wb') as f:
+            f.write(r.content)
+        logging.info(f"✅ База GeoIP скачана: {GEOIP_DB_PATH}")
+        return True
+    except Exception as e:
+        logging.error(f"❌ Не удалось скачать базу GeoIP: {e}")
+        return False
+
+# Инициализация reader'а GeoIP
+reader = None
+if ensure_geoip_db():
+    try:
+        reader = geoip2.database.Reader(GEOIP_DB_PATH)
+    except Exception as e:
+        logging.error(f"❌ Не удалось открыть базу GeoIP: {e}")
+        reader = None
+
+def get_country_flag(ip):
+    """Возвращает эмодзи-флаг по IP (или пустую строку)."""
+    if reader is None:
+        return ""
+    try:
+        response = reader.country(ip)
+        country_code = response.country.iso_code
+        if country_code:
+            # Конвертируем код (RU, US) в региональные символы 🇷🇺, 🇺🇸
+            return ''.join(chr(127397 + ord(c)) for c in country_code.upper())
+    except Exception:
+        pass
+    return ""
+
+# ---------- Вспомогательные функции ----------
 @lru_cache(maxsize=256)
 def resolve_host(host):
     """Кэширует IP-адрес по имени хоста."""
@@ -138,7 +189,6 @@ def parse_vless_link(link):
         security = params.get('security', ['none'])[0]
         if security == 'tsl':
             security = 'tls'
-            logging.debug(f"Нормализовано security: tsl -> tls для {link[:60]}")
 
         config = {
             'uuid': uuid,
@@ -156,7 +206,6 @@ def parse_vless_link(link):
             'path': params.get('path', ['/'])[0],
             'host_header': params.get('host', [host])[0]
         }
-        logging.debug(f"Парсинг ссылки {link[:60]}... -> {config}")
         return config
     except Exception as e:
         logging.debug(f"Ошибка парсинга ссылки {link[:50]}...: {e}")
@@ -267,12 +316,6 @@ def check_vless_real(link):
 
         time.sleep(XRAY_STARTUP_DELAY)
 
-        # Проверка, что порт открыт
-        sock_check = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        if sock_check.connect_ex(('127.0.0.1', SOCKS_PORT)) != 0:
-            logging.debug(f"Порт {SOCKS_PORT} не открыт после запуска Xray")
-        sock_check.close()
-
         proxies = {
             'http': f'socks5h://127.0.0.1:{SOCKS_PORT}',
             'https': f'socks5h://127.0.0.1:{SOCKS_PORT}'
@@ -296,12 +339,7 @@ def check_vless_real(link):
                     logging.debug(f"URL {test_url} вернул {response.status_code}")
             except requests.exceptions.RequestException as e:
                 logging.debug(f"Попытка для {test_url} не удалась: {e}")
-                # продолжаем со следующим URL
 
-        if process:
-            stdout, stderr = process.communicate(timeout=5)
-            if stderr:
-                logging.info(f"Xray stderr для {link[:60]}: {stderr[:1000]}")
         return (link, False, None)
 
     except Exception as e:
@@ -320,7 +358,7 @@ def check_vless_real(link):
 def filter_working_links(links):
     total = len(links)
 
-    # Этап 1: TCP-проверка всех ссылок
+    # Этап 1: TCP-проверка
     logging.info(f"🌐 Этап 1: TCP-проверка {total} ссылок (параллельность {TCP_MAX_WORKERS}, таймаут {TCP_CHECK_TIMEOUT}с)...")
     tcp_ok = []
     with ThreadPoolExecutor(max_workers=TCP_MAX_WORKERS) as executor:
@@ -336,14 +374,12 @@ def filter_working_links(links):
     logging.info(f"📊 TCP-проверка завершена. Прошли: {len(tcp_ok)}/{total}")
 
     if ONLY_TCP:
-        logging.info("⚡ Режим ONLY_TCP: возвращаем результаты TCP-проверки.")
         return tcp_ok
 
     if not tcp_ok:
-        logging.warning("⚠️ Нет ссылок, прошедших TCP. Реальная проверка не требуется.")
         return []
 
-    # Этап 2: реальная проверка только для прошедших TCP
+    # Этап 2: реальная проверка
     logging.info(f"🧪 Этап 2: Реальная проверка {len(tcp_ok)} ссылок через Xray-core (порт {SOCKS_PORT}, параллельность {REAL_CHECK_CONCURRENCY})...")
     working_real = []
     too_slow = 0
@@ -369,7 +405,7 @@ def filter_working_links(links):
 def save_working_links(links):
     """
     Сохраняет рабочие ссылки в subscription.txt с красивыми заголовками.
-    Каждая ссылка получает тег вида: #СЕРВЕР 0001 | ОБНОВЛЕН ДД-ММ-ГГГГ
+    Каждая ссылка получает тег с номером, флагом страны и датой.
     """
     today = datetime.now().strftime("%d-%m-%Y")
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
@@ -379,23 +415,37 @@ def save_working_links(links):
         f.write(f"#profile-update-interval:{PROFILE_UPDATE_INTERVAL}\n")
         f.write(f"#support-url:{SUPPORT_URL}\n")
         f.write(f"#profile-web-page-url:{PROFILE_WEB_PAGE_URL}\n")
-        f.write(f"#announce: АКТИВНЫХ СЕРВЕРОВ {len(links)} | ОБНОВЛЕНО {today}\n")
+        # Аннонс с эмодзи
+        f.write(f"#announce: АКТИВНЫХ СЕРВЕРОВ 🚀 {len(links)} | ОБНОВЛЕНО 📅 {today}\n")
 
-        # Сами ссылки с нумерацией
+        # Сами ссылки с нумерацией и флагами
         for idx, link in enumerate(links, start=1):
-            # Удаляем всё после символа '#' (включая его) – это убирает старые теги
+            # Удаляем старые теги
             link = re.sub(r'#.*$', '', link)
-            # Формируем номер с ведущими нулями (0001, 0002, ...)
             server_num = f"{idx:04d}"
-            tag = f"#СЕРВЕР {server_num} | ОБНОВЛЕН {today}"
+
+            # Определяем флаг страны
+            flag = ""
+            config = parse_vless_link(link)
+            if config:
+                try:
+                    ip = resolve_host(config['host'])
+                    flag = get_country_flag(ip)
+                except Exception:
+                    pass
+
+            # Формируем тег
+            if flag:
+                tag = f"#СЕРВЕР {server_num} | {flag} | ОБНОВЛЕН {today}"
+            else:
+                tag = f"#СЕРВЕР {server_num} | ОБНОВЛЕН {today}"
+
             f.write(link + tag + '\n')
 
     logging.info(f"💾 Сохранено {len(links)} рабочих ссылок в {OUTPUT_FILE} с заголовками и нумерацией.")
 
 def create_base64_subscription():
-    """
-    Читает обычный файл подписки и создаёт его Base64-версию.
-    """
+    """Создаёт Base64-версию подписки."""
     try:
         with open(OUTPUT_FILE, 'rb') as f:
             content = f.read()
@@ -438,7 +488,6 @@ def main():
     working_links = filter_working_links(all_links)
     save_working_links(working_links)
 
-    # Создаём Base64-версию подписки
     if working_links:
         create_base64_subscription()
     else:
