@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # GENERATOR.py – Максимально быстрая проверка Vless/SS/Trojan серверов + флаги стран (эмодзи)
 # Версия с поддержкой часового пояса для даты в подписке
+# Уровень логирования задаётся переменной окружения LOG_LEVEL (по умолчанию INFO)
 
+import os
 import re
 import socket
 import base64
@@ -10,27 +12,25 @@ import subprocess
 import time
 import json
 import tempfile
-import os
 import sys
 from urllib.parse import urlparse, parse_qs
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 from datetime import datetime
 
-# ---------- НАСТРОЙКА ЛОГИРОВАНИЯ (ВЫВОД В STDOUT, СБРОС ПОСЛЕ КАЖДОЙ ЗАПИСИ) ----------
+# ---------- НАСТРОЙКА ЛОГИРОВАНИЯ (уровень из переменной окружения) ----------
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)  # <-- теперь логи идут в stdout
-    ],
-    force=True  # переопределяет предыдущие настройки
+    handlers=[logging.StreamHandler(sys.stdout)],
+    force=True
 )
 
 # Попытка импорта zoneinfo для локального времени
 try:
     from zoneinfo import ZoneInfo
-    TIMEZONE = "Asia/Yekaterinburg"  # ⬅️ измените на свой (например, Europe/Moscow)
+    TIMEZONE = "Asia/Yekaterinburg"  # ⬅️ измените на свой
     LOCAL_NOW = datetime.now(ZoneInfo(TIMEZONE))
     logging.info(f"🕐 Используется часовой пояс: {TIMEZONE}")
 except ImportError:
@@ -546,9 +546,10 @@ def filter_working_links(links):
             link, ok = future.result()
             if ok:
                 tcp_ok.append(link)
-                logging.info(f"✅ TCP OK [{i}/{total}]: {link[:80]}...")
+                # Детали только в debug
+                logging.debug(f"✅ TCP OK [{i}/{total}]: {link[:80]}...")
             else:
-                logging.info(f"❌ TCP Failed [{i}/{total}]: {link[:80]}...")
+                logging.debug(f"❌ TCP Failed [{i}/{total}]: {link[:80]}...")
 
     logging.info(f"📊 TCP-проверка завершена. Прошли: {len(tcp_ok)}/{total}")
 
@@ -569,12 +570,12 @@ def filter_working_links(links):
             if is_working:
                 if MAX_LATENCY_MS > 0 and latency > MAX_LATENCY_MS:
                     too_slow += 1
-                    logging.info(f"⚠️ [{i}/{len(tcp_ok)}] Слишком медленный (latency: {latency}ms > {MAX_LATENCY_MS}ms): {link[:80]}...")
+                    logging.debug(f"⚠️ [{i}/{len(tcp_ok)}] Слишком медленный (latency: {latency}ms > {MAX_LATENCY_MS}ms): {link[:80]}...")
                 else:
                     working_real.append(link)
-                    logging.info(f"✅ [{i}/{len(tcp_ok)}] Работает (latency: {latency}ms): {link[:80]}...")
+                    logging.debug(f"✅ [{i}/{len(tcp_ok)}] Работает (latency: {latency}ms): {link[:80]}...")
             else:
-                logging.info(f"❌ [{i}/{len(tcp_ok)}] Не работает: {link[:80]}...")
+                logging.debug(f"❌ [{i}/{len(tcp_ok)}] Не работает: {link[:80]}...")
 
     if MAX_LATENCY_MS > 0 and too_slow > 0:
         logging.info(f"⚠️ Отсеяно по скорости: {too_slow} серверов с latency > {MAX_LATENCY_MS}ms")
