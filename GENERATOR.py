@@ -2,6 +2,7 @@
 # GENERATOR.py – Двухуровневая проверка Vless/SS/Trojan серверов + флаги стран
 # Оптимизация: флаг определяется сразу после TCP, реальная проверка только для серверов с флагом
 # Ускорение Xray: 30 потоков, задержка 1с, таймаут 8с, один тестовый URL
+# Логи TCP убраны, остаётся только итог этапа
 
 import os
 import re
@@ -483,16 +484,11 @@ def filter_working_links(links):
         future_to_link = {executor.submit(check_tcp, link): link for link in links}
         for future in as_completed(future_to_link):
             current_check += 1
-            record_counter += 1
+            # record_counter не увеличиваем, чтобы нумерация начиналась с реальной проверки
             link, ok, ip = future.result()
-            short = shorten_link(link)
             if ok:
                 tcp_success.append((link, ip))
-                status = "TCP ✅"
-            else:
-                status = "TCP ❌"
-            logging.info(f"{record_counter} {status} [{current_check}/{total_checks}]: {short}")
-
+            # Лог каждой TCP-проверки убран, остаётся только итог
     logging.info(f"📊 TCP-проверка завершена. Прошли: {len(tcp_success)}/{total_checks}")
 
     if not tcp_success:
