@@ -614,11 +614,11 @@ def save_working_links(links):
                 except Exception:
                     pass
 
-            # Формируем тег
+            # Формируем тег (изменённый формат)
             if flag:
-                tag = f"#СЕРВЕР {server_num} | {flag} | ОБНОВЛЕН {TODAY_STR}"
+                tag = f"#🔑📱СЕРВЕР {server_num} | {flag} |"
             else:
-                tag = f"#СЕРВЕР {server_num} | ОБНОВЛЕН {TODAY_STR}"
+                tag = f"#🔑📱СЕРВЕР {server_num} |"
 
             f.write(link + tag + '\n')
 
