@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GENERATOR.py – Двухуровневая проверка Vless/SS/Trojan серверов + флаги стран
-# Компактное логирование: только протокол://хост:порт
+# Оптимизация: флаг определяется сразу после TCP, реальная проверка только для серверов с флагом
 
 import os
 import re
@@ -406,11 +406,11 @@ def create_xray_config(config):
     base_config["outbounds"].append(outbound)
     return base_config
 
-# ---------- TCP ПРОВЕРКА ----------
+# ---------- TCP ПРОВЕРКА (возвращает IP при успехе) ----------
 def check_tcp(link):
     parsed = parse_link(link)
     if not parsed:
-        return (link, False)
+        return (link, False, None)
     host, port = parsed['host'], parsed['port']
     try:
         ip = resolve_host(host)
@@ -418,9 +418,9 @@ def check_tcp(link):
         sock.settimeout(TCP_CHECK_TIMEOUT)
         result = sock.connect_ex((ip, port))
         sock.close()
-        return (link, result == 0)
+        return (link, result == 0, ip if result == 0 else None)
     except:
-        return (link, False)
+        return (link, False, None)
 
 # ---------- РЕАЛЬНАЯ ПРОВЕРКА ----------
 def check_real(link):
@@ -470,41 +470,61 @@ def check_real(link):
         if os.path.exists(config_path):
             os.unlink(config_path)
 
-# ---------- ДВУХУРОВНЕВАЯ ФИЛЬТРАЦИЯ (КОМПАКТНЫЙ ЛОГ) ----------
+# ---------- ДВУХУРОВНЕВАЯ ФИЛЬТРАЦИЯ С ОТСЕВОМ ПО ФЛАГУ ----------
 def filter_working_links(links):
     global record_counter, current_check, total_checks
     total_checks = len(links)
     logging.info(f"🚀 Начинаю двухуровневую проверку {total_checks} ссылок")
 
-    # Этап 1: TCP
+    # Этап 1: TCP-проверка + сбор IP для успешных
     logging.info(f"🌐 Этап 1: TCP-проверка {total_checks} ссылок...")
-    tcp_ok = []
+    tcp_success = []  # (link, ip)
     with ThreadPoolExecutor(max_workers=TCP_MAX_WORKERS) as executor:
         future_to_link = {executor.submit(check_tcp, link): link for link in links}
         for future in as_completed(future_to_link):
             current_check += 1
             record_counter += 1
-            link, ok = future.result()
+            link, ok, ip = future.result()
             short = shorten_link(link)
             if ok:
-                tcp_ok.append(link)
+                tcp_success.append((link, ip))
                 status = "TCP ✅"
             else:
                 status = "TCP ❌"
             logging.info(f"{record_counter} {status} [{current_check}/{total_checks}]: {short}")
 
-    logging.info(f"📊 TCP-проверка завершена. Прошли: {len(tcp_ok)}/{total_checks}")
+    logging.info(f"📊 TCP-проверка завершена. Прошли: {len(tcp_success)}/{total_checks}")
 
-    if not tcp_ok:
+    if not tcp_success:
         return []
 
-    # Этап 2: реальная проверка
-    logging.info(f"🧪 Этап 2: Реальная проверка {len(tcp_ok)} ссылок...")
-    working_links = []
-    stage_total = len(tcp_ok)
+    # Определяем флаги для прошедших TCP
+    logging.info(f"🌍 Определение флагов для {len(tcp_success)} серверов...")
+    links_with_flags = []  # (link, flag)
+    for link, ip in tcp_success:
+        flag = get_country_flag(ip) if ip else ""
+        if flag:
+            links_with_flags.append((link, flag))
+        else:
+            short = shorten_link(link)
+            logging.debug(f"Сервер без флага отсеян: {short}")
+
+    logging.info(f"🧾 Серверов с флагами: {len(links_with_flags)}")
+
+    if not links_with_flags:
+        return []
+
+    # Этап 2: реальная проверка только для серверов с флагами
+    logging.info(f"🧪 Этап 2: Реальная проверка {len(links_with_flags)} ссылок...")
+    working_links_with_flags = []  # (link, flag)
+    stage_total = len(links_with_flags)
     stage_current = 0
+
+    # Для реальной проверки нам нужны только ссылки
+    links_to_check = [link for link, _ in links_with_flags]
+
     with ThreadPoolExecutor(max_workers=REAL_CHECK_CONCURRENCY) as executor:
-        future_to_link = {executor.submit(check_real, link): link for link in tcp_ok}
+        future_to_link = {executor.submit(check_real, link): link for link in links_to_check}
         for future in as_completed(future_to_link):
             stage_current += 1
             current_check += 1
@@ -512,7 +532,7 @@ def filter_working_links(links):
             link, is_working, latency = future.result()
             short = shorten_link(link)
 
-            # Определяем протокол (уже есть в short, но для единообразия)
+            # Определяем протокол
             if link.startswith('vless://'):
                 proto = 'vless'
             elif link.startswith('ss://'):
@@ -522,7 +542,10 @@ def filter_working_links(links):
             else:
                 proto = '?'
 
-            # Формируем статус и эмодзи
+            # Находим соответствующий флаг (используем словарь для быстрого доступа)
+            flag_dict = dict(links_with_flags)
+            flag = flag_dict[link]
+
             if is_working:
                 if MAX_LATENCY_MS > 0 and latency > MAX_LATENCY_MS:
                     emoji = "⚠️"
@@ -530,44 +553,41 @@ def filter_working_links(links):
                 else:
                     emoji = "✅"
                     status_detail = f"({latency}ms)"
-                    working_links.append(link)
+                    working_links_with_flags.append((link, flag))
             else:
                 emoji = "❌"
                 status_detail = ""
 
-            # Собираем строку лога
             log_msg = f"{record_counter} {proto} {emoji} [{stage_current}/{stage_total}]"
             if status_detail:
                 log_msg += f" {status_detail}"
             log_msg += f": {short}"
             logging.info(log_msg)
 
-    logging.info(f"📊 Реальная проверка завершена. Рабочих: {len(working_links)}/{stage_total}")
-    return working_links
+    logging.info(f"📊 Реальная проверка завершена. Рабочих с флагами: {len(working_links_with_flags)}/{stage_total}")
+    return working_links_with_flags   # возвращаем список кортежей (link, flag)
 
-# ---------- СОХРАНЕНИЕ РЕЗУЛЬТАТОВ ----------
-def save_working_links(links):
-    logging.info(f"💾 Сохраняю {len(links)} рабочих ссылок в {OUTPUT_FILE}")
+# ---------- СОХРАНЕНИЕ РЕЗУЛЬТАТОВ (ТОЛЬКО С ФЛАГАМИ) ----------
+def save_working_links(links_with_flags):
+    logging.info(f"💾 Сохраняю {len(links_with_flags)} серверов с флагами...")
+    if not links_with_flags:
+        logging.warning("Нет серверов для сохранения.")
+        return 0
+
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         f.write(f"#profile-title:{PROFILE_TITLE}\n")
         f.write(f"#subscription-userinfo:{SUBSCRIPTION_USERINFO}\n")
         f.write(f"#profile-update-interval:{PROFILE_UPDATE_INTERVAL}\n")
         f.write(f"#support-url:{SUPPORT_URL}\n")
         f.write(f"#profile-web-page-url:{PROFILE_WEB_PAGE_URL}\n")
-        f.write(f"#announce: АКТИВНЫХ СЕРВЕРОВ 🚀 {len(links)} | ОБНОВЛЕНО 📅 {TODAY_STR}\n")
-        for idx, link in enumerate(links, 1):
-            link = re.sub(r'#.*$', '', link)
-            flag = ""
-            config = parse_link(link)
-            if config:
-                try:
-                    ip = resolve_host(config['host'])
-                    flag = get_country_flag(ip)
-                except:
-                    pass
-            tag = f"#🔑📱СЕРВЕР {idx:04d} | {flag} |" if flag else f"#🔑📱СЕРВЕР {idx:04d} |"
-            f.write(link + tag + '\n')
-    logging.info(f"✅ Сохранено в {OUTPUT_FILE}")
+        f.write(f"#announce: АКТИВНЫХ СЕРВЕРОВ 🚀 {len(links_with_flags)} | ОБНОВЛЕНО 📅 {TODAY_STR}\n")
+        for idx, (link, flag) in enumerate(links_with_flags, 1):
+            link_clean = re.sub(r'#.*$', '', link)   # удаляем возможные старые теги
+            tag = f"#🔑📱СЕРВЕР {idx:04d} | {flag} |"
+            f.write(link_clean + tag + '\n')
+
+    logging.info(f"✅ Сохранено {len(links_with_flags)} серверов в {OUTPUT_FILE}")
+    return len(links_with_flags)
 
 def create_base64_subscription():
     try:
@@ -616,15 +636,15 @@ def main():
     current_check = 0
     total_checks = len(all_links)
 
-    working_links = filter_working_links(all_links)
-    save_working_links(working_links)
+    working_links_with_flags = filter_working_links(all_links)
+    written = save_working_links(working_links_with_flags)
 
-    if working_links:
+    if written > 0:
         create_base64_subscription()
     else:
-        logging.warning("Нет рабочих ссылок – Base64 не создана.")
+        logging.warning("Нет серверов с флагами – Base64 не создана.")
 
-    logging.info(f"📊 Итог: {len(working_links)} рабочих из {len(all_links)} проверенных")
+    logging.info(f"📊 Итог: {len(working_links_with_flags)} рабочих с флагами из {len(all_links)} проверенных")
     logging.info("🏁 Работа завершена")
 
 if __name__ == "__main__":
