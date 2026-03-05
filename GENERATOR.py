@@ -2,7 +2,7 @@
 # GENERATOR.py – Максимально быстрая проверка Vless/SS/Trojan серверов + флаги стран (эмодзи)
 # Версия с поддержкой часового пояса для даты в подписке
 # Уровень логирования задаётся переменной окружения LOG_LEVEL (по умолчанию INFO)
-# Доработано: подробный лог как на скриншоте (с номерами записей, буквами X/A, статусами)
+# Доработано: подробный лог со смайликами (✅ работающий, ⚠️ медленный, ❌ неработающий)
 
 import os
 import re
@@ -28,7 +28,7 @@ logging.basicConfig(
     force=True
 )
 
-# ---------- ДОБАВЛЕНО: счётчики для подробного лога ----------
+# ---------- СЧЁТЧИКИ ДЛЯ ПОДРОБНОГО ЛОГА ----------
 record_counter = 0          # сквозной номер записи в логе
 current_check = 0           # текущий номер проверяемой ссылки
 total_checks = 0            # общее количество ссылок для проверки
@@ -76,7 +76,7 @@ TCP_MAX_WORKERS = 400
 # Реальная проверка
 SOCKS_PORT = 8080
 REAL_CHECK_TIMEOUT = 12
-REAL_CHECK_CONCURRENCY = 20   # Увеличено для большей скорости (можно настроить)
+REAL_CHECK_CONCURRENCY = 20   # можно настроить под ваше железо
 XRAY_STARTUP_DELAY = 2
 RETRY_COUNT = 0
 
@@ -542,7 +542,8 @@ def check_real(link):
 def filter_working_links(links):
     """
     Проверяет все ссылки через реальные запросы (или только TCP, если ONLY_TCP=True).
-    Для каждой ссылки выводит подробный лог в формате как на скриншоте.
+    Для каждой ссылки выводит подробный лог со смайликами:
+      ✅ — работает, ⚠️ — слишком медленный, ❌ — не работает.
     Возвращает список рабочих ссылок (с latency <= MAX_LATENCY_MS).
     """
     global record_counter, current_check, total_checks
@@ -551,7 +552,7 @@ def filter_working_links(links):
 
     working_links = []
     if ONLY_TCP:
-        # Режим только TCP-проверки (быстрый, без xray)
+        # Режим только TCP-проверки
         with ThreadPoolExecutor(max_workers=TCP_MAX_WORKERS) as executor:
             future_to_link = {executor.submit(check_tcp, link): link for link in links}
             for future in as_completed(future_to_link):
@@ -560,14 +561,13 @@ def filter_working_links(links):
                 link, ok = future.result()
                 if ok:
                     working_links.append(link)
+                    emoji = "✅"
                     status_text = "Pabaotat (TCP)"
-                    status_letter = "X"
                 else:
+                    emoji = "❌"
                     status_text = "He pabotaet"
-                    status_letter = "X"
-                # Обрезаем ссылку для читаемости
                 short_link = link[:120] + "..." if len(link) > 120 else link
-                logging.info(f"{record_counter:04d} {status_letter} [{current_check}/{total_checks}] {status_text}: {short_link}")
+                logging.info(f"{record_counter} {emoji} [{current_check}/{total_checks}] {status_text}: {short_link}")
     else:
         # Полная проверка через Xray
         with ThreadPoolExecutor(max_workers=REAL_CHECK_CONCURRENCY) as executor:
@@ -577,21 +577,20 @@ def filter_working_links(links):
                 record_counter += 1
                 link, is_working, latency = future.result()
 
-                # Определяем статус и букву
                 if is_working:
                     if MAX_LATENCY_MS > 0 and latency > MAX_LATENCY_MS:
+                        emoji = "⚠️"
                         status_text = f"Слишком медленный (latency: {latency}ms > {MAX_LATENCY_MS}ms)"
-                        status_letter = "A"
                     else:
+                        emoji = "✅"
                         status_text = f"Pabaotat (latency: {latency}ms)"
-                        status_letter = "X"
                         working_links.append(link)
                 else:
+                    emoji = "❌"
                     status_text = "He pabotaet"
-                    status_letter = "X"
 
                 short_link = link[:120] + "..." if len(link) > 120 else link
-                logging.info(f"{record_counter:04d} {status_letter} [{current_check}/{total_checks}] {status_text}: {short_link}")
+                logging.info(f"{record_counter} {emoji} [{current_check}/{total_checks}] {status_text}: {short_link}")
 
     logging.info(f"📊 Проверка завершена. Рабочих: {len(working_links)}/{total_checks}")
     return working_links
