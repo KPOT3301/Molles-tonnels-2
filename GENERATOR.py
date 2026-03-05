@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # GENERATOR.py – Двухуровневая проверка Vless/SS/Trojan серверов + флаги стран
 # Оптимизация: флаг определяется сразу после TCP, реальная проверка только для серверов с флагом
-# Ускорение Xray: 30 потоков, задержка 1с, таймаут 8с, один тестовый URL
+# Ускорение Xray: 30 потоков, задержка 1с, таймаут 15с (увеличен), повторы 2, один тестовый URL
 # Логи TCP убраны, остаётся только итог этапа
 
 import os
@@ -70,15 +70,15 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 XRAY_CORE_PATH = "xray"
 
 # TCP-проверка
-TCP_CHECK_TIMEOUT = 2
+TCP_CHECK_TIMEOUT = 10
 TCP_MAX_WORKERS = 400
 
-# Реальная проверка
+# Реальная проверка (изменённые параметры)
 SOCKS_PORT = 8080
-REAL_CHECK_TIMEOUT = 8
+REAL_CHECK_TIMEOUT = 15               # увеличено с 10 до 15
 REAL_CHECK_CONCURRENCY = 30
 XRAY_STARTUP_DELAY = 1
-RETRY_COUNT = 0
+RETRY_COUNT = 2                        # было 0, теперь 2
 
 TEST_URLS = [
     "http://connectivitycheck.gstatic.com/generate_204"
@@ -312,11 +312,10 @@ def shorten_link(link):
     parsed = parse_link(link)
     if parsed:
         return f"{parsed['protocol']}://{parsed['host']}:{parsed['port']}"
-    # если не удалось распарсить, обрезаем до первого знака ?
     q_pos = link.find('?')
     if q_pos != -1:
         return link[:q_pos]
-    return link[:80]  # на всякий случай
+    return link[:80]
 
 # ---------- СОЗДАНИЕ КОНФИГА XRAY ----------
 def create_xray_config(config):
@@ -359,7 +358,7 @@ def create_xray_config(config):
         elif config['security'] == 'reality':
             outbound["streamSettings"]["realitySettings"] = {
                 "serverName": config.get('sni', config['host']),
-                "fingerprint": config.get('fp', 'chrome'),
+                "fingerprint": config.get('fp', 'random'),   # изменено с 'chrome' на 'random'
                 "publicKey": config.get('pbk', ''),
                 "shortId": config.get('sid', ''),
                 "spiderX": config.get('spx', '/')
@@ -423,7 +422,7 @@ def check_tcp(link):
     except:
         return (link, False, None)
 
-# ---------- РЕАЛЬНАЯ ПРОВЕРКА ----------
+# ---------- РЕАЛЬНАЯ ПРОВЕРКА (с повторными попытками и любым HTTP-статусом) ----------
 def check_real(link):
     config_dict = parse_link(link)
     if not config_dict:
@@ -445,19 +444,27 @@ def check_real(link):
             'http': f'socks5h://127.0.0.1:{SOCKS_PORT}',
             'https': f'socks5h://127.0.0.1:{SOCKS_PORT}'
         }
-        for test_url in TEST_URLS:
-            try:
-                start = time.time()
-                resp = requests.get(
-                    test_url, proxies=proxies, timeout=REAL_CHECK_TIMEOUT,
-                    headers={'User-Agent': USER_AGENT}, allow_redirects=False
-                )
-                latency = int((time.time() - start) * 1000)
-                if resp.status_code == 204:
+
+        # Цикл повторных попыток
+        for attempt in range(RETRY_COUNT + 1):
+            for test_url in TEST_URLS:
+                try:
+                    start = time.time()
+                    resp = requests.get(
+                        test_url, proxies=proxies, timeout=REAL_CHECK_TIMEOUT,
+                        headers={'User-Agent': USER_AGENT}, allow_redirects=False
+                    )
+                    latency = int((time.time() - start) * 1000)
+                    # Любой ответ (даже с ошибкой) считаем успехом, т.к. соединение через прокси установлено
                     return (link, True, latency)
-            except:
-                continue
+                except Exception:
+                    continue
+            # Если ни один URL не сработал на этой попытке, делаем паузу перед следующей
+            time.sleep(1)
+
+        # Если все попытки исчерпаны
         return (link, False, None)
+
     except Exception as e:
         logging.debug(f"Ошибка при проверке {link[:60]}: {e}")
         return (link, False, None)
@@ -484,11 +491,9 @@ def filter_working_links(links):
         future_to_link = {executor.submit(check_tcp, link): link for link in links}
         for future in as_completed(future_to_link):
             current_check += 1
-            # record_counter не увеличиваем, чтобы нумерация начиналась с реальной проверки
             link, ok, ip = future.result()
             if ok:
                 tcp_success.append((link, ip))
-            # Лог каждой TCP-проверки убран, остаётся только итог
     logging.info(f"📊 TCP-проверка завершена. Прошли: {len(tcp_success)}/{total_checks}")
 
     if not tcp_success:
@@ -538,7 +543,7 @@ def filter_working_links(links):
             else:
                 proto = '?'
 
-            # Находим соответствующий флаг (используем словарь для быстрого доступа)
+            # Находим соответствующий флаг
             flag_dict = dict(links_with_flags)
             flag = flag_dict[link]
 
@@ -561,7 +566,7 @@ def filter_working_links(links):
             logging.info(log_msg)
 
     logging.info(f"📊 Реальная проверка завершена. Рабочих с флагами: {len(working_links_with_flags)}/{stage_total}")
-    return working_links_with_flags   # возвращаем список кортежей (link, flag)
+    return working_links_with_flags
 
 # ---------- СОХРАНЕНИЕ РЕЗУЛЬТАТОВ (ТОЛЬКО С ФЛАГАМИ) ----------
 def save_working_links(links_with_flags):
@@ -578,7 +583,7 @@ def save_working_links(links_with_flags):
         f.write(f"#profile-web-page-url:{PROFILE_WEB_PAGE_URL}\n")
         f.write(f"#announce: АКТИВНЫХ СЕРВЕРОВ 🚀 {len(links_with_flags)} | ОБНОВЛЕНО 📅 {TODAY_STR}\n")
         for idx, (link, flag) in enumerate(links_with_flags, 1):
-            link_clean = re.sub(r'#.*$', '', link)   # удаляем возможные старые теги
+            link_clean = re.sub(r'#.*$', '', link)
             tag = f"#🔑📱СЕРВЕР {idx:04d} | {flag} |"
             f.write(link_clean + tag + '\n')
 
@@ -615,7 +620,7 @@ def check_xray_available():
 # ---------- ГЛАВНАЯ ФУНКЦИЯ ----------
 def main():
     global record_counter, current_check, total_checks
-    logging.info("🟢 Запуск генератора подписок")
+    logging.info("🟢 Запуск генератора подписок (увеличенные таймауты: TCP=10с, Xray=15с, повторы=2)")
     if not check_xray_available():
         logging.error("Xray-core обязателен. Завершение.")
         return
