@@ -2,6 +2,7 @@
 # GENERATOR.py – Максимально быстрая проверка Vless/SS/Trojan серверов + флаги стран (эмодзи)
 # Версия с поддержкой часового пояса для даты в подписке
 # Уровень логирования задаётся переменной окружения LOG_LEVEL (по умолчанию INFO)
+# Доработано: подробный лог как на скриншоте (с номерами записей, буквами X/A, статусами)
 
 import os
 import re
@@ -18,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 from datetime import datetime
 
-# ---------- НАСТРОЙКА ЛОГИРОВАНИЯ (уровень из переменной окружения) ----------
+# ---------- НАСТРОЙКА ЛОГИРОВАНИЯ ----------
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -26,6 +27,11 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
     force=True
 )
+
+# ---------- ДОБАВЛЕНО: счётчики для подробного лога ----------
+record_counter = 0          # сквозной номер записи в логе
+current_check = 0           # текущий номер проверяемой ссылки
+total_checks = 0            # общее количество ссылок для проверки
 
 # Попытка импорта zoneinfo для локального времени
 try:
@@ -63,14 +69,14 @@ REQUEST_TIMEOUT = 10
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 XRAY_CORE_PATH = "xray"
 
-# Ускоренная TCP-проверка
+# Ускоренная TCP-проверка (оставлена, но теперь не используется в основном режиме)
 TCP_CHECK_TIMEOUT = 2
 TCP_MAX_WORKERS = 400
 
 # Реальная проверка
 SOCKS_PORT = 8080
 REAL_CHECK_TIMEOUT = 12
-REAL_CHECK_CONCURRENCY = 9
+REAL_CHECK_CONCURRENCY = 20   # Увеличено для большей скорости (можно настроить)
 XRAY_STARTUP_DELAY = 2
 RETRY_COUNT = 0
 
@@ -80,7 +86,7 @@ TEST_URLS = [
 ]
 
 MAX_LATENCY_MS = 500   # 0.5 секунды
-ONLY_TCP = False
+ONLY_TCP = False       # Если True – будет только TCP-проверка (без реальной)
 
 # ---------- GeoIP ----------
 GEOIP_DB_PATH = "GeoLite2-Country.mmdb"
@@ -534,53 +540,61 @@ def check_real(link):
             os.unlink(config_path)
 
 def filter_working_links(links):
-    total = len(links)
-    logging.info(f"🚀 Начинаю фильтрацию {total} ссылок")
+    """
+    Проверяет все ссылки через реальные запросы (или только TCP, если ONLY_TCP=True).
+    Для каждой ссылки выводит подробный лог в формате как на скриншоте.
+    Возвращает список рабочих ссылок (с latency <= MAX_LATENCY_MS).
+    """
+    global record_counter, current_check, total_checks
+    total_checks = len(links)
+    logging.info(f"🚀 Начинаю проверку {total_checks} ссылок (режим: {'только TCP' if ONLY_TCP else 'полная'})")
 
-    # Этап 1: TCP-проверка
-    logging.info(f"🌐 Этап 1: TCP-проверка {total} ссылок (параллельность {TCP_MAX_WORKERS}, таймаут {TCP_CHECK_TIMEOUT}с)...")
-    tcp_ok = []
-    with ThreadPoolExecutor(max_workers=TCP_MAX_WORKERS) as executor:
-        future_to_link = {executor.submit(check_tcp, link): link for link in links}
-        for i, future in enumerate(as_completed(future_to_link), 1):
-            link, ok = future.result()
-            if ok:
-                tcp_ok.append(link)
-                # Детали только в debug
-                logging.debug(f"✅ TCP OK [{i}/{total}]: {link[:80]}...")
-            else:
-                logging.debug(f"❌ TCP Failed [{i}/{total}]: {link[:80]}...")
-
-    logging.info(f"📊 TCP-проверка завершена. Прошли: {len(tcp_ok)}/{total}")
-
+    working_links = []
     if ONLY_TCP:
-        return tcp_ok
-
-    if not tcp_ok:
-        return []
-
-    # Этап 2: реальная проверка
-    logging.info(f"🧪 Этап 2: Реальная проверка {len(tcp_ok)} ссылок через Xray-core (порт {SOCKS_PORT}, параллельность {REAL_CHECK_CONCURRENCY})...")
-    working_real = []
-    too_slow = 0
-    with ThreadPoolExecutor(max_workers=REAL_CHECK_CONCURRENCY) as executor:
-        future_to_link = {executor.submit(check_real, link): link for link in tcp_ok}
-        for i, future in enumerate(as_completed(future_to_link), 1):
-            link, is_working, latency = future.result()
-            if is_working:
-                if MAX_LATENCY_MS > 0 and latency > MAX_LATENCY_MS:
-                    too_slow += 1
-                    logging.debug(f"⚠️ [{i}/{len(tcp_ok)}] Слишком медленный (latency: {latency}ms > {MAX_LATENCY_MS}ms): {link[:80]}...")
+        # Режим только TCP-проверки (быстрый, без xray)
+        with ThreadPoolExecutor(max_workers=TCP_MAX_WORKERS) as executor:
+            future_to_link = {executor.submit(check_tcp, link): link for link in links}
+            for future in as_completed(future_to_link):
+                current_check += 1
+                record_counter += 1
+                link, ok = future.result()
+                if ok:
+                    working_links.append(link)
+                    status_text = "Pabaotat (TCP)"
+                    status_letter = "X"
                 else:
-                    working_real.append(link)
-                    logging.debug(f"✅ [{i}/{len(tcp_ok)}] Работает (latency: {latency}ms): {link[:80]}...")
-            else:
-                logging.debug(f"❌ [{i}/{len(tcp_ok)}] Не работает: {link[:80]}...")
+                    status_text = "He pabotaet"
+                    status_letter = "X"
+                # Обрезаем ссылку для читаемости
+                short_link = link[:120] + "..." if len(link) > 120 else link
+                logging.info(f"{record_counter:04d} {status_letter} [{current_check}/{total_checks}] {status_text}: {short_link}")
+    else:
+        # Полная проверка через Xray
+        with ThreadPoolExecutor(max_workers=REAL_CHECK_CONCURRENCY) as executor:
+            future_to_link = {executor.submit(check_real, link): link for link in links}
+            for future in as_completed(future_to_link):
+                current_check += 1
+                record_counter += 1
+                link, is_working, latency = future.result()
 
-    if MAX_LATENCY_MS > 0 and too_slow > 0:
-        logging.info(f"⚠️ Отсеяно по скорости: {too_slow} серверов с latency > {MAX_LATENCY_MS}ms")
+                # Определяем статус и букву
+                if is_working:
+                    if MAX_LATENCY_MS > 0 and latency > MAX_LATENCY_MS:
+                        status_text = f"Слишком медленный (latency: {latency}ms > {MAX_LATENCY_MS}ms)"
+                        status_letter = "A"
+                    else:
+                        status_text = f"Pabaotat (latency: {latency}ms)"
+                        status_letter = "X"
+                        working_links.append(link)
+                else:
+                    status_text = "He pabotaet"
+                    status_letter = "X"
 
-    return working_real
+                short_link = link[:120] + "..." if len(link) > 120 else link
+                logging.info(f"{record_counter:04d} {status_letter} [{current_check}/{total_checks}] {status_text}: {short_link}")
+
+    logging.info(f"📊 Проверка завершена. Рабочих: {len(working_links)}/{total_checks}")
+    return working_links
 
 def save_working_links(links):
     """
@@ -615,7 +629,7 @@ def save_working_links(links):
                 except Exception:
                     pass
 
-            # Формируем тег (изменённый формат)
+            # Формируем тег
             if flag:
                 tag = f"#🔑📱СЕРВЕР {server_num} | {flag} |"
             else:
@@ -655,9 +669,10 @@ def check_xray_available():
         return False
 
 def main():
+    global record_counter, current_check, total_checks
     logging.info("🟢 Запуск генератора подписок")
-    if not check_xray_available():
-        logging.error("Xray-core обязателен. Завершение.")
+    if not check_xray_available() and not ONLY_TCP:
+        logging.error("Xray-core обязателен для полной проверки. Завершение.")
         return
 
     sources = read_sources()
@@ -667,6 +682,11 @@ def main():
     all_links = gather_all_links(sources)
     if not all_links:
         return
+
+    # Сброс счётчиков перед проверкой
+    record_counter = 0
+    current_check = 0
+    total_checks = len(all_links)
 
     working_links = filter_working_links(all_links)
     save_working_links(working_links)
