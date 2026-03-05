@@ -84,7 +84,7 @@ TEST_URLS = [
     "http://connectivitycheck.gstatic.com/generate_204"
 ]
 
-MAX_LATENCY_MS = 1500
+MAX_LATENCY_MS = 2000
 
 # ---------- GEOIP ЗАГРУЗКА ----------
 GEOIP_DB_PATH = "GeoLite2-Country.mmdb"
