@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # GENERATOR.py – Двухуровневая проверка Vless/SS/Trojan серверов + флаги стран
 # Оптимизация: флаг определяется сразу после TCP, реальная проверка только для серверов с флагом
+# Ускорение Xray: 30 потоков, задержка 1с, таймаут 8с, один тестовый URL
 
 import os
 import re
@@ -73,14 +74,13 @@ TCP_MAX_WORKERS = 400
 
 # Реальная проверка
 SOCKS_PORT = 8080
-REAL_CHECK_TIMEOUT = 12
-REAL_CHECK_CONCURRENCY = 20
-XRAY_STARTUP_DELAY = 2
+REAL_CHECK_TIMEOUT = 8
+REAL_CHECK_CONCURRENCY = 30
+XRAY_STARTUP_DELAY = 1
 RETRY_COUNT = 0
 
 TEST_URLS = [
-    "http://connectivitycheck.gstatic.com/generate_204",
-    "http://cp.cloudflare.com/generate_204"
+    "http://connectivitycheck.gstatic.com/generate_204"
 ]
 
 MAX_LATENCY_MS = 500
