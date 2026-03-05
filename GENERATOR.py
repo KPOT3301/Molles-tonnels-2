@@ -2,7 +2,7 @@
 # GENERATOR.py – Максимально быстрая проверка Vless/SS/Trojan серверов + флаги стран (эмодзи)
 # Версия с поддержкой часового пояса для даты в подписке
 # Уровень логирования задаётся переменной окружения LOG_LEVEL (по умолчанию INFO)
-# Доработано: подробный лог со смайликами (✅ работающий, ⚠️ медленный, ❌ неработающий)
+# Доработано: подробный лог со смайликами (✅ работает, ⚠️ медленный, ❌ не работает) и русским текстом
 
 import os
 import re
@@ -542,8 +542,7 @@ def check_real(link):
 def filter_working_links(links):
     """
     Проверяет все ссылки через реальные запросы (или только TCP, если ONLY_TCP=True).
-    Для каждой ссылки выводит подробный лог со смайликами:
-      ✅ — работает, ⚠️ — слишком медленный, ❌ — не работает.
+    Для каждой ссылки выводит подробный лог со смайликами и русским текстом.
     Возвращает список рабочих ссылок (с latency <= MAX_LATENCY_MS).
     """
     global record_counter, current_check, total_checks
@@ -562,10 +561,10 @@ def filter_working_links(links):
                 if ok:
                     working_links.append(link)
                     emoji = "✅"
-                    status_text = "Pabaotat (TCP)"
+                    status_text = "Работает (TCP)"
                 else:
                     emoji = "❌"
-                    status_text = "He pabotaet"
+                    status_text = "Не работает"
                 short_link = link[:120] + "..." if len(link) > 120 else link
                 logging.info(f"{record_counter} {emoji} [{current_check}/{total_checks}] {status_text}: {short_link}")
     else:
@@ -583,11 +582,11 @@ def filter_working_links(links):
                         status_text = f"Слишком медленный (latency: {latency}ms > {MAX_LATENCY_MS}ms)"
                     else:
                         emoji = "✅"
-                        status_text = f"Pabaotat (latency: {latency}ms)"
+                        status_text = f"Работает (latency: {latency}ms)"
                         working_links.append(link)
                 else:
                     emoji = "❌"
-                    status_text = "He pabotaet"
+                    status_text = "Не работает"
 
                 short_link = link[:120] + "..." if len(link) > 120 else link
                 logging.info(f"{record_counter} {emoji} [{current_check}/{total_checks}] {status_text}: {short_link}")
