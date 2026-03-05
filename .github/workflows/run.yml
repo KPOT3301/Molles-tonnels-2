@@ -2,7 +2,7 @@ name: Check Vless Servers
 
 on:
   schedule:
-    - cron: '0 21 * * *'   # 21:00 UTC = 00:00 MSK
+    - cron: '0 19 * * *'   # 19:00 UTC = 00:00 Оренбург (UTC+5)
   workflow_dispatch:
 
 jobs:
@@ -12,8 +12,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # Важно: нужна полная история для корректного pull/rebase
-          fetch-depth: 0
+          fetch-depth: 0   # нужна полная история для корректного pull/rebase
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -40,13 +39,10 @@ jobs:
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add subscription.txt
-          # Проверяем, есть ли изменения в индексе
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
             git commit -m "Auto-update subscription.txt"
-            # Получаем последние изменения из удалённой ветки (rebase, чтобы избежать лишних merge-коммитов)
             git pull --rebase origin main
-            # Отправляем изменения
             git push
           fi
