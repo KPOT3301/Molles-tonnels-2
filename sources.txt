@@ -44,3 +44,9 @@ https://raw.githubusercontent.com/VP01596/vless-top15/refs/heads/main/top100.txt
 https://github.com/WSJuJuB01/urban-succotash/releases/download/WS_VPN/NOTHINGV5.txt
 #WL RUS
 https://wlrus.lol/confs/blackl.txt
+#niyakwi
+https://raw.githubusercontent.com/Niyakwi/Vpn-config.txt/main/VPN.txt
+#openray
+https://github.com/nikita29a/FreeProxyList/raw/refs/heads/main/mirror/1.txt
+#черные списки
+https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_SS+All_RUS.txt
