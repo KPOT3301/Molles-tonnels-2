@@ -24,6 +24,3 @@ https://raw.githubusercontent.com/VP01596/vless-top15/refs/heads/main/top100.txt
 # juju
 https://github.com/WSJuJuB01/urban-succotash/releases/download/WS_VPN/NOTHINGV5.txt
 
-# openray
-https://github.com/nikita29a/FreeProxyList/raw/refs/heads/main/mirror/1.txt
-
