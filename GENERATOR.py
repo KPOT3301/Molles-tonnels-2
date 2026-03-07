@@ -84,7 +84,7 @@ TEST_URLS = [
     "http://connectivitycheck.gstatic.com/generate_204"
 ]
 
-MAX_LATENCY_MS = 1000
+MAX_LATENCY_MS = 500
 
 # ---------- GEOIP ЗАГРУЗКА (CITY) ----------
 GEOIP_DB_PATH = "GeoLite2-City.mmdb"
