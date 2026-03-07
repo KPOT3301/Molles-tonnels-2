@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# GENERATOR.py – Двухуровневая проверка Vless/SS/Trojan серверов + флаги стран
-# Оптимизация: флаг определяется сразу после TCP, реальная проверка только для серверов с флагом
+# GENERATOR.py – Двухуровневая проверка Vless/SS/Trojan серверов + флаги стран и города
+# Оптимизация: флаг и город определяются сразу после TCP, реальная проверка только для серверов с флагом
 # Ускорение Xray: 30 потоков, задержка 1с, таймаут 15с (увеличен), повторы 2, один тестовый URL
 # Логи TCP убраны, остаётся только итог этапа
 
@@ -46,13 +46,13 @@ TODAY_STR = LOCAL_NOW.strftime("%d-%m-%Y")
 
 import requests
 
-# ---------- GEOIP ----------
+# ---------- GEOIP (CITY) ----------
 try:
     import geoip2.database
     GEOIP_AVAILABLE = True
 except ImportError:
     GEOIP_AVAILABLE = False
-    logging.warning("⚠️ geoip2 не установлена. Флаги стран не будут добавлены.")
+    logging.warning("⚠️ geoip2 не установлена. Флаги стран и города не будут добавлены.")
 
 # ---------- КОНСТАНТЫ ПОДПИСКИ ----------
 PROFILE_TITLE = "🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
@@ -86,22 +86,22 @@ TEST_URLS = [
 
 MAX_LATENCY_MS = 10000
 
-# ---------- GEOIP ЗАГРУЗКА ----------
-GEOIP_DB_PATH = "GeoLite2-Country.mmdb"
-GEOIP_DB_URL = "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-Country.mmdb"
+# ---------- GEOIP ЗАГРУЗКА (CITY) ----------
+GEOIP_DB_PATH = "GeoLite2-City.mmdb"
+GEOIP_DB_URL = "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-City.mmdb"
 
 def ensure_geoip_db():
     if not GEOIP_AVAILABLE:
         return False
     if os.path.exists(GEOIP_DB_PATH):
         return True
-    logging.info("🌍 Скачиваю базу GeoIP...")
+    logging.info("🌍 Скачиваю базу GeoIP (City)...")
     try:
         r = requests.get(GEOIP_DB_URL, timeout=30)
         r.raise_for_status()
         with open(GEOIP_DB_PATH, 'wb') as f:
             f.write(r.content)
-        logging.info("✅ База GeoIP скачана")
+        logging.info("✅ База GeoIP (City) скачана")
         return True
     except Exception as e:
         logging.error(f"❌ Ошибка скачивания GeoIP: {e}")
@@ -114,17 +114,18 @@ if ensure_geoip_db():
     except Exception as e:
         logging.error(f"❌ Не удалось открыть базу GeoIP: {e}")
 
-def get_country_flag(ip):
+def get_geo_info(ip):
+    """Возвращает (флаг, город) для указанного IP"""
     if reader is None:
-        return ""
+        return "", ""
     try:
-        response = reader.country(ip)
-        code = response.country.iso_code
-        if code:
-            return ''.join(chr(127397 + ord(c)) for c in code.upper())
-    except:
-        pass
-    return ""
+        response = reader.city(ip)
+        country_code = response.country.iso_code
+        city = response.city.name if response.city.name else ""
+        flag = ''.join(chr(127397 + ord(c)) for c in country_code.upper()) if country_code else ""
+        return flag, city
+    except Exception:
+        return "", ""
 
 # ---------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ----------
 @lru_cache(maxsize=256)
@@ -499,30 +500,27 @@ def filter_working_links(links):
     if not tcp_success:
         return []
 
-    # Определяем флаги для прошедших TCP
-    logging.info(f"🌍 Определение флагов для {len(tcp_success)} серверов...")
-    links_with_flags = []  # (link, flag)
+    # Определяем флаги и города для прошедших TCP
+    logging.info(f"🌍 Определение геоданных для {len(tcp_success)} серверов...")
+    geo_by_link = {}  # link -> (flag, city)
     for link, ip in tcp_success:
-        flag = get_country_flag(ip) if ip else ""
-        if flag:
-            links_with_flags.append((link, flag))
-        else:
-            short = shorten_link(link)
-            logging.debug(f"Сервер без флага отсеян: {short}")
+        flag, city = get_geo_info(ip) if ip else ("", "")
+        if flag:   # оставляем только те, у которых есть флаг (как в оригинале)
+            geo_by_link[link] = (flag, city)
 
-    logging.info(f"🧾 Серверов с флагами: {len(links_with_flags)}")
+    logging.info(f"🧾 Серверов с флагами: {len(geo_by_link)}")
 
-    if not links_with_flags:
+    if not geo_by_link:
         return []
 
     # Этап 2: реальная проверка только для серверов с флагами
-    logging.info(f"🧪 Этап 2: Реальная проверка {len(links_with_flags)} ссылок...")
-    working_links_with_flags = []  # (link, flag)
-    stage_total = len(links_with_flags)
+    logging.info(f"🧪 Этап 2: Реальная проверка {len(geo_by_link)} ссылок...")
+    working_links_with_geo = []  # (link, flag, city)
+    stage_total = len(geo_by_link)
     stage_current = 0
 
     # Для реальной проверки нам нужны только ссылки
-    links_to_check = [link for link, _ in links_with_flags]
+    links_to_check = list(geo_by_link.keys())
 
     with ThreadPoolExecutor(max_workers=REAL_CHECK_CONCURRENCY) as executor:
         future_to_link = {executor.submit(check_real, link): link for link in links_to_check}
@@ -543,9 +541,8 @@ def filter_working_links(links):
             else:
                 proto = '?'
 
-            # Находим соответствующий флаг
-            flag_dict = dict(links_with_flags)
-            flag = flag_dict[link]
+            # Находим соответствующий флаг и город
+            flag, city = geo_by_link[link]
 
             if is_working:
                 if MAX_LATENCY_MS > 0 and latency > MAX_LATENCY_MS:
@@ -554,7 +551,7 @@ def filter_working_links(links):
                 else:
                     emoji = "✅"
                     status_detail = f"({latency}ms)"
-                    working_links_with_flags.append((link, flag))
+                    working_links_with_geo.append((link, flag, city))
             else:
                 emoji = "❌"
                 status_detail = ""
@@ -565,13 +562,13 @@ def filter_working_links(links):
             log_msg += f": {short}"
             logging.info(log_msg)
 
-    logging.info(f"📊 Реальная проверка завершена. Рабочих с флагами: {len(working_links_with_flags)}/{stage_total}")
-    return working_links_with_flags
+    logging.info(f"📊 Реальная проверка завершена. Рабочих с флагами: {len(working_links_with_geo)}/{stage_total}")
+    return working_links_with_geo
 
-# ---------- СОХРАНЕНИЕ РЕЗУЛЬТАТОВ (ТОЛЬКО С ФЛАГАМИ) ----------
-def save_working_links(links_with_flags):
-    logging.info(f"💾 Сохраняю {len(links_with_flags)} серверов с флагами...")
-    if not links_with_flags:
+# ---------- СОХРАНЕНИЕ РЕЗУЛЬТАТОВ (С ФЛАГАМИ И ГОРОДАМИ) ----------
+def save_working_links(links_with_geo):
+    logging.info(f"💾 Сохраняю {len(links_with_geo)} серверов с геоданными...")
+    if not links_with_geo:
         logging.warning("Нет серверов для сохранения.")
         return 0
 
@@ -581,14 +578,15 @@ def save_working_links(links_with_flags):
         f.write(f"#profile-update-interval:{PROFILE_UPDATE_INTERVAL}\n")
         f.write(f"#support-url:{SUPPORT_URL}\n")
         f.write(f"#profile-web-page-url:{PROFILE_WEB_PAGE_URL}\n")
-        f.write(f"#announce: АКТИВНЫХ СЕРВЕРОВ 🚀 {len(links_with_flags)} | ОБНОВЛЕНО 📅 {TODAY_STR}\n")
-        for idx, (link, flag) in enumerate(links_with_flags, 1):
+        f.write(f"#announce: АКТИВНЫХ СЕРВЕРОВ 🚀 {len(links_with_geo)} | ОБНОВЛЕНО 📅 {TODAY_STR}\n")
+        for idx, (link, flag, city) in enumerate(links_with_geo, 1):
             link_clean = re.sub(r'#.*$', '', link)
-            tag = f"#🔑📱СЕРВЕР {idx:04d} | {flag} |"
+            city_part = f" {city}" if city else ""
+            tag = f"#🔑📱СЕРВЕР {idx:04d} | {flag}{city_part} |"
             f.write(link_clean + tag + '\n')
 
-    logging.info(f"✅ Сохранено {len(links_with_flags)} серверов в {OUTPUT_FILE}")
-    return len(links_with_flags)
+    logging.info(f"✅ Сохранено {len(links_with_geo)} серверов в {OUTPUT_FILE}")
+    return len(links_with_geo)
 
 def create_base64_subscription():
     try:
@@ -637,15 +635,15 @@ def main():
     current_check = 0
     total_checks = len(all_links)
 
-    working_links_with_flags = filter_working_links(all_links)
-    written = save_working_links(working_links_with_flags)
+    working_links_with_geo = filter_working_links(all_links)
+    written = save_working_links(working_links_with_geo)
 
     if written > 0:
         create_base64_subscription()
     else:
         logging.warning("Нет серверов с флагами – Base64 не создана.")
 
-    logging.info(f"📊 Итог: {len(working_links_with_flags)} рабочих с флагами из {len(all_links)} проверенных")
+    logging.info(f"📊 Итог: {len(working_links_with_geo)} рабочих с флагами из {len(all_links)} проверенных")
     logging.info("🏁 Работа завершена")
 
 if __name__ == "__main__":
