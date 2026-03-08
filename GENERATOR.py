@@ -578,11 +578,13 @@ def save_working_links(links_with_geo):
         f.write(f"#profile-update-interval:{PROFILE_UPDATE_INTERVAL}\n")
         f.write(f"#support-url:{SUPPORT_URL}\n")
         f.write(f"#profile-web-page-url:{PROFILE_WEB_PAGE_URL}\n")
-        f.write(f"#announce: АКТИВНЫХ СЕРВЕРОВ 🚀 {len(links_with_geo)} | ОБНОВЛЕНО 📅 {TODAY_STR}\n")
+        # Изменено: "СЕРВЕРОВ" -> "ТОННЕЛЕЙ"
+        f.write(f"#announce: АКТИВНЫХ ТОННЕЛЕЙ 🚀 {len(links_with_geo)} | ОБНОВЛЕНО 📅 {TODAY_STR}\n")
         for idx, (link, flag, city) in enumerate(links_with_geo, 1):
             link_clean = re.sub(r'#.*$', '', link)
             city_part = f" {city}" if city else ""
-            tag = f"#🔑📱СЕРВЕР {idx:04d} | {flag}{city_part} |"
+            # Изменено: "СЕРВЕР" -> "ТОННЕЛЬ"
+            tag = f"#🔑📱ТОННЕЛЬ {idx:04d} | {flag}{city_part} |"
             f.write(link_clean + tag + '\n')
 
     logging.info(f"✅ Сохранено {len(links_with_geo)} серверов в {OUTPUT_FILE}")
