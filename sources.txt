@@ -11,9 +11,6 @@ http://allvpn.x10.mx/sub.php
 # лайм
 https://raw.githubusercontent.com/LimeHi/LimeVPN/refs/heads/main/LimeVPN.txt?v=1
 
-# LimeVPNPaser
-https://raw.githubusercontent.com/LimeHi/LimeVPNGenerator/main/Keys.txt?v=1
-
 # ZipVPN
 https://raw.githubusercontent.com/zipvpn/FreeVPNNodes/refs/heads/main/free_v2ray_xray_nodes.txt
 
