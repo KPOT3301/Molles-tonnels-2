@@ -34,15 +34,16 @@ jobs:
       - name: Run GENERATOR.py
         run: python GENERATOR.py
 
-      - name: Commit and push if subscription.txt changed
+      - name: Commit and push if changed
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add subscription.txt
+          git add subscription.txt subscription_base64.txt
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "Auto-update subscription.txt"
+            git commit -m "Auto-update subscription files"
             git pull --rebase origin main
             git push
           fi
+          
