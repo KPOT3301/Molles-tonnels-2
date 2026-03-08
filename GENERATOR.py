@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-# GENERATOR.py – Двухуровневая проверка Vless/SS/Trojan серверов + флаги стран и города
+# GENERATOR.py – Двухуровневая проверка Vless/SS/Trojan/VMess/Hysteria2 серверов + флаги стран и города
+# Добавлены протоколы VMess и Hysteria2, ужесточение критериев: HTTPS для TLS, скорость (512 КБ, мин. 500 KB/s),
+# отсев по latency сразу после HTTP, упрощённый лог.
 # Оптимизация: флаг и город определяются сразу после TCP, реальная проверка только для серверов с флагом
-# Ускорение Xray: 30 потоков, задержка 1с, таймаут 15с (увеличен), повторы 2, один тестовый URL
-# Логи TCP убраны, остаётся только итог этапа
+# Ускорение Xray: 30 потоков, задержка 1с, таймаут 15с, повторы 2, один тестовый URL
 
 import os
 import re
@@ -29,14 +30,14 @@ logging.basicConfig(
 )
 
 # ---------- СЧЁТЧИКИ ДЛЯ ЛОГОВ ----------
-record_counter = 0
+record_counter = 0  # не используется в логах, но может пригодиться
 current_check = 0
 total_checks = 0
 
 # ---------- ЧАСОВОЙ ПОЯС ----------
 try:
     from zoneinfo import ZoneInfo
-    TIMEZONE = "Asia/Yekaterinburg"  # ⬅️ измените при необходимости
+    TIMEZONE = "Asia/Yekaterinburg"
     LOCAL_NOW = datetime.now(ZoneInfo(TIMEZONE))
     logging.info(f"🕐 Используется часовой пояс: {TIMEZONE}")
 except ImportError:
@@ -73,18 +74,22 @@ XRAY_CORE_PATH = "xray"
 TCP_CHECK_TIMEOUT = 10
 TCP_MAX_WORKERS = 400
 
-# Реальная проверка (изменённые параметры)
+# Реальная проверка
 SOCKS_PORT = 8080
-REAL_CHECK_TIMEOUT = 15               # увеличено с 10 до 15
+REAL_CHECK_TIMEOUT = 15
 REAL_CHECK_CONCURRENCY = 30
 XRAY_STARTUP_DELAY = 1
-RETRY_COUNT = 2                        # было 0, теперь 2
+RETRY_COUNT = 2
 
 TEST_URLS = [
     "http://connectivitycheck.gstatic.com/generate_204"
 ]
 
 MAX_LATENCY_MS = 500
+
+# Константы для проверки скорости
+SPEED_TEST_URL = "http://speedtest.tele2.net/512KB.zip"
+MIN_SPEED_KBPS = 500
 
 # ---------- GEOIP ЗАГРУЗКА (CITY) ----------
 GEOIP_DB_PATH = "GeoLite2-City.mmdb"
@@ -158,7 +163,8 @@ def fetch_content(url):
         return None
 
 def extract_links_from_text(text):
-    return re.findall(r'(?:vless|ss|trojan)://[^\s<>"\']+', text)
+    # Добавлены vmess и hysteria2/hy2
+    return re.findall(r'(?:vless|ss|trojan|vmess|hysteria2|hy2)://[^\s<>"\']+', text)
 
 def decode_base64_content(encoded):
     try:
@@ -172,7 +178,7 @@ def gather_all_links(sources):
     all_links = set()
     for idx, src in enumerate(sources, 1):
         logging.info(f"📦 [{idx}/{len(sources)}] {src[:60]}...")
-        if src.startswith(('vless://', 'ss://', 'trojan://')):
+        if src.startswith(('vless://', 'ss://', 'trojan://', 'vmess://', 'hysteria2://', 'hy2://')):
             all_links.add(src)
             continue
         content = fetch_content(src)
@@ -204,6 +210,7 @@ def parse_vless_link(link):
         security = params.get('security', ['none'])[0]
         if security == 'tsl':
             security = 'tls'
+        explicit_sni = params.get('sni', [None])[0]
         return {
             'protocol': 'vless',
             'uuid': uuid,
@@ -212,7 +219,8 @@ def parse_vless_link(link):
             'security': security,
             'encryption': params.get('encryption', ['none'])[0],
             'type': params.get('type', ['tcp'])[0],
-            'sni': params.get('sni', [host])[0],
+            'sni': explicit_sni if explicit_sni else host,
+            'explicit_sni': explicit_sni,
             'fp': params.get('fp', ['chrome'])[0],
             'pbk': params.get('pbk', [''])[0],
             'sid': params.get('sid', [''])[0],
@@ -262,7 +270,8 @@ def parse_ss_link(link):
             'port': port,
             'method': method,
             'password': password,
-            'original': link
+            'original': link,
+            'explicit_sni': None
         }
     except Exception as e:
         logging.debug(f"Ошибка парсинга SS: {e}")
@@ -279,7 +288,14 @@ def parse_trojan_link(link):
         host = parsed.hostname
         port = parsed.port or 443
         params = parse_qs(parsed.query)
-        sni = params.get('peer', [None])[0] or params.get('sni', [host])[0]
+        peer_param = params.get('peer')
+        sni_param = params.get('sni')
+        explicit_sni = None
+        if peer_param:
+            explicit_sni = peer_param[0]
+        elif sni_param:
+            explicit_sni = sni_param[0]
+        sni = explicit_sni if explicit_sni else host
         allow_insecure = params.get('allowInsecure', ['0'])[0].lower() in ('1', 'true', 'yes')
         network = params.get('type', ['tcp'])[0]
         security = params.get('security', ['tls'])[0]
@@ -289,6 +305,7 @@ def parse_trojan_link(link):
             'port': port,
             'password': password,
             'sni': sni,
+            'explicit_sni': explicit_sni,
             'allow_insecure': allow_insecure,
             'network': network,
             'security': security,
@@ -298,6 +315,89 @@ def parse_trojan_link(link):
         logging.debug(f"Ошибка парсинга Trojan: {e}")
         return None
 
+def parse_vmess_link(link):
+    try:
+        b64_part = link[8:]  # после vmess://
+        if '#' in b64_part:
+            b64_part = b64_part.split('#')[0]
+        decoded = base64.b64decode(b64_part).decode('utf-8')
+        cfg = json.loads(decoded)
+        host = cfg.get('add')
+        if not host:
+            return None
+        port = int(cfg.get('port', 443))
+        uuid = cfg.get('id')
+        if not uuid:
+            return None
+        security = cfg.get('scy', 'auto')
+        network = cfg.get('net', 'tcp')
+        path = cfg.get('path', '/')
+        host_header = cfg.get('host', host)
+        tls = cfg.get('tls') == 'tls'
+        sni = cfg.get('peer') or host_header or host
+        return {
+            'protocol': 'vmess',
+            'host': host,
+            'port': port,
+            'uuid': uuid,
+            'security': security,
+            'type': network,
+            'path': path,
+            'host_header': host_header,
+            'tls': tls,
+            'sni': sni,
+            'explicit_sni': cfg.get('peer'),
+            'allow_insecure': cfg.get('allowInsecure', False)
+        }
+    except Exception as e:
+        logging.debug(f"Ошибка парсинга VMess: {e}")
+        return None
+
+def parse_hysteria2_link(link):
+    try:
+        if link.startswith('hysteria2://'):
+            rest = link[12:]
+        elif link.startswith('hy2://'):
+            rest = link[6:]
+        else:
+            return None
+
+        userinfo = None
+        hostport = rest
+        if '@' in rest:
+            userinfo, hostport = rest.split('@', 1)
+
+        password = None
+        if userinfo:
+            password = userinfo
+
+        parsed = urlparse(f"//{hostport}")
+        host = parsed.hostname
+        port = parsed.port or 443
+        params = parse_qs(parsed.query)
+
+        insecure = params.get('insecure', ['0'])[0].lower() in ('1', 'true', 'yes')
+        sni = params.get('sni', [host])[0]
+        up = params.get('up', [''])[0]
+        down = params.get('down', [''])[0]
+        obfs = params.get('obfs', [''])[0]
+
+        return {
+            'protocol': 'hysteria2',
+            'host': host,
+            'port': port,
+            'password': password,
+            'sni': sni,
+            'explicit_sni': sni if sni != host else None,
+            'allow_insecure': insecure,
+            'up': up,
+            'down': down,
+            'obfs': obfs
+        }
+    except Exception as e:
+        logging.debug(f"Ошибка парсинга Hysteria2: {e}")
+        return None
+
 def parse_link(link):
     if link.startswith('vless://'):
         return parse_vless_link(link)
@@ -305,6 +405,10 @@ def parse_link(link):
         return parse_ss_link(link)
     elif link.startswith('trojan://'):
         return parse_trojan_link(link)
+    elif link.startswith('vmess://'):
+        return parse_vmess_link(link)
+    elif link.startswith(('hysteria2://', 'hy2://')):
+        return parse_hysteria2_link(link)
     else:
         return None
 
@@ -331,6 +435,7 @@ def create_xray_config(config):
         "outbounds": []
     }
     protocol = config['protocol']
+
     if protocol == 'vless':
         outbound = {
             "protocol": "vless",
@@ -359,7 +464,7 @@ def create_xray_config(config):
         elif config['security'] == 'reality':
             outbound["streamSettings"]["realitySettings"] = {
                 "serverName": config.get('sni', config['host']),
-                "fingerprint": config.get('fp', 'random'),   # изменено с 'chrome' на 'random'
+                "fingerprint": config.get('fp', 'random'),
                 "publicKey": config.get('pbk', ''),
                 "shortId": config.get('sid', ''),
                 "spiderX": config.get('spx', '/')
@@ -369,6 +474,36 @@ def create_xray_config(config):
                 "path": config.get('path', '/'),
                 "headers": {"Host": config.get('host_header', config['host'])}
             }
+
+    elif protocol == 'vmess':
+        outbound = {
+            "protocol": "vmess",
+            "settings": {
+                "vnext": [{
+                    "address": config['host'],
+                    "port": config['port'],
+                    "users": [{
+                        "id": config['uuid'],
+                        "security": config.get('security', 'auto')
+                    }]
+                }]
+            },
+            "streamSettings": {
+                "network": config.get('type', 'tcp'),
+                "security": config.get('tls', False) and "tls" or "none"
+            }
+        }
+        if config.get('tls'):
+            outbound["streamSettings"]["tlsSettings"] = {
+                "serverName": config.get('sni', config['host']),
+                "allowInsecure": config.get('allow_insecure', False)
+            }
+        if config.get('type') == 'ws':
+            outbound["streamSettings"]["wsSettings"] = {
+                "path": config.get('path', '/'),
+                "headers": {"Host": config.get('host_header', config['host'])}
+            }
+
     elif protocol == 'ss':
         outbound = {
             "protocol": "shadowsocks",
@@ -382,6 +517,7 @@ def create_xray_config(config):
             },
             "streamSettings": {"network": "tcp", "security": "none"}
         }
+
     elif protocol == 'trojan':
         outbound = {
             "protocol": "trojan",
@@ -402,8 +538,32 @@ def create_xray_config(config):
                 "serverName": config.get('sni', config['host']),
                 "allowInsecure": config.get('allow_insecure', False)
             }
+
+    elif protocol == 'hysteria2':
+        outbound = {
+            "protocol": "hysteria2",
+            "settings": {
+                "server": config['host'],
+                "port": config['port'],
+                "password": config['password'],
+                "tls": {
+                    "sni": config.get('sni', config['host']),
+                    "insecure": config.get('allow_insecure', False)
+                }
+            }
+        }
+        if config.get('up') or config.get('down'):
+            outbound["settings"]["bandwidth"] = {}
+            if config.get('up'):
+                outbound["settings"]["bandwidth"]["up"] = config['up']
+            if config.get('down'):
+                outbound["settings"]["bandwidth"]["down"] = config['down']
+        if config.get('obfs'):
+            outbound["settings"]["obfs"] = config['obfs']
+
     else:
         return None
+
     base_config["outbounds"].append(outbound)
     return base_config
 
@@ -423,7 +583,7 @@ def check_tcp(link):
     except:
         return (link, False, None)
 
-# ---------- РЕАЛЬНАЯ ПРОВЕРКА (с повторными попытками и любым HTTP-статусом) ----------
+# ---------- РЕАЛЬНАЯ ПРОВЕРКА (с дополнительными тестами) ----------
 def check_real(link):
     config_dict = parse_link(link)
     if not config_dict:
@@ -431,9 +591,11 @@ def check_real(link):
     xray_config = create_xray_config(config_dict)
     if not xray_config:
         return (link, False, None)
+
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
         config_path = f.name
         json.dump(xray_config, f, indent=2)
+
     process = None
     try:
         process = subprocess.Popen(
@@ -446,7 +608,21 @@ def check_real(link):
             'https': f'socks5h://127.0.0.1:{SOCKS_PORT}'
         }
 
-        # Цикл повторных попыток
+        # Определяем, нужно ли проверять HTTPS (для TLS-ключей)
+        needs_https = False
+        if config_dict['protocol'] in ('vless', 'vmess', 'trojan', 'hysteria2'):
+            if config_dict['protocol'] == 'vmess':
+                needs_https = config_dict.get('tls', False)
+            elif config_dict['protocol'] == 'hysteria2':
+                needs_https = True
+            else:
+                security = config_dict.get('security', 'none')
+                if security in ('tls', 'reality'):
+                    needs_https = True
+
+        # HTTP-проверка (с повторными попытками)
+        http_success = False
+        http_latency = None
         for attempt in range(RETRY_COUNT + 1):
             for test_url in TEST_URLS:
                 try:
@@ -456,15 +632,57 @@ def check_real(link):
                         headers={'User-Agent': USER_AGENT}, allow_redirects=False
                     )
                     latency = int((time.time() - start) * 1000)
-                    # Любой ответ (даже с ошибкой) считаем успехом, т.к. соединение через прокси установлено
-                    return (link, True, latency)
+                    http_success = True
+                    http_latency = latency
+                    break
                 except Exception:
                     continue
-            # Если ни один URL не сработал на этой попытке, делаем паузу перед следующей
+            if http_success:
+                break
             time.sleep(1)
 
-        # Если все попытки исчерпаны
-        return (link, False, None)
+        if not http_success:
+            return (link, False, None)
+
+        # Отсев по latency сразу после HTTP
+        if http_latency > MAX_LATENCY_MS:
+            return (link, False, http_latency)
+
+        # Дополнительная проверка HTTPS (если нужна)
+        if needs_https:
+            https_ok = False
+            for attempt in range(2):
+                try:
+                    https_test = "https://www.google.com/generate_204"
+                    resp = requests.get(https_test, proxies=proxies, timeout=REAL_CHECK_TIMEOUT,
+                                        headers={'User-Agent': USER_AGENT}, verify=False)
+                    https_ok = True
+                    break
+                except Exception:
+                    time.sleep(1)
+            if not https_ok:
+                return (link, False, None)
+
+        # Проверка скорости (512 КБ)
+        try:
+            start_time = time.time()
+            r = requests.get(SPEED_TEST_URL, proxies=proxies, stream=True, timeout=30)
+            r.raise_for_status()
+            downloaded = 0
+            for chunk in r.iter_content(chunk_size=8192):
+                downloaded += len(chunk)
+                if downloaded >= 512 * 1024:
+                    break
+            elapsed = time.time() - start_time
+            if elapsed > 0:
+                speed_kbps = (downloaded / 1024) / elapsed
+                if speed_kbps < MIN_SPEED_KBPS:
+                    return (link, False, None)
+        except Exception:
+            return (link, False, None)
+
+        # Все проверки пройдены
+        return (link, True, http_latency)
 
     except Exception as e:
         logging.debug(f"Ошибка при проверке {link[:60]}: {e}")
@@ -505,7 +723,7 @@ def filter_working_links(links):
     geo_by_link = {}  # link -> (flag, city)
     for link, ip in tcp_success:
         flag, city = get_geo_info(ip) if ip else ("", "")
-        if flag:   # оставляем только те, у которых есть флаг (как в оригинале)
+        if flag:
             geo_by_link[link] = (flag, city)
 
     logging.info(f"🧾 Серверов с флагами: {len(geo_by_link)}")
@@ -519,7 +737,6 @@ def filter_working_links(links):
     stage_total = len(geo_by_link)
     stage_current = 0
 
-    # Для реальной проверки нам нужны только ссылки
     links_to_check = list(geo_by_link.keys())
 
     with ThreadPoolExecutor(max_workers=REAL_CHECK_CONCURRENCY) as executor:
@@ -538,28 +755,23 @@ def filter_working_links(links):
                 proto = 'ss'
             elif link.startswith('trojan://'):
                 proto = 'trojan'
+            elif link.startswith('vmess://'):
+                proto = 'vmess'
+            elif link.startswith(('hysteria2://', 'hy2://')):
+                proto = 'hy2'
             else:
                 proto = '?'
 
-            # Находим соответствующий флаг и город
             flag, city = geo_by_link[link]
 
+            # Упрощённый лог (без record_counter и деталей latency)
             if is_working:
-                if MAX_LATENCY_MS > 0 and latency > MAX_LATENCY_MS:
-                    emoji = "⚠️"
-                    status_detail = f"({latency}ms > {MAX_LATENCY_MS}ms)"
-                else:
-                    emoji = "✅"
-                    status_detail = f"({latency}ms)"
-                    working_links_with_geo.append((link, flag, city))
+                working_links_with_geo.append((link, flag, city))
+                emoji = "✅"
             else:
                 emoji = "❌"
-                status_detail = ""
 
-            log_msg = f"{record_counter} {proto} {emoji} [{stage_current}/{stage_total}]"
-            if status_detail:
-                log_msg += f" {status_detail}"
-            log_msg += f": {short}"
+            log_msg = f"{proto} {emoji} [{stage_current}/{stage_total}]: {short}"
             logging.info(log_msg)
 
     logging.info(f"📊 Реальная проверка завершена. Рабочих с флагами: {len(working_links_with_geo)}/{stage_total}")
@@ -578,12 +790,10 @@ def save_working_links(links_with_geo):
         f.write(f"#profile-update-interval:{PROFILE_UPDATE_INTERVAL}\n")
         f.write(f"#support-url:{SUPPORT_URL}\n")
         f.write(f"#profile-web-page-url:{PROFILE_WEB_PAGE_URL}\n")
-        # Изменено: "СЕРВЕРОВ" -> "ТОННЕЛЕЙ"
         f.write(f"#announce: АКТИВНЫХ ТОННЕЛЕЙ 🚀 {len(links_with_geo)} | ОБНОВЛЕНО 📅 {TODAY_STR}\n")
         for idx, (link, flag, city) in enumerate(links_with_geo, 1):
             link_clean = re.sub(r'#.*$', '', link)
             city_part = f" {city}" if city else ""
-            # Изменено: "СЕРВЕР" -> "ТОННЕЛЬ"
             tag = f"#🔑📱ТОННЕЛЬ {idx:04d} | {flag}{city_part} |"
             f.write(link_clean + tag + '\n')
 
@@ -620,7 +830,7 @@ def check_xray_available():
 # ---------- ГЛАВНАЯ ФУНКЦИЯ ----------
 def main():
     global record_counter, current_check, total_checks
-    logging.info("🟢 Запуск генератора подписок (увеличенные таймауты: TCP=10с, Xray=15с, повторы=2)")
+    logging.info("🟢 Запуск генератора подписок (протоколы: Vless, SS, Trojan, VMess, Hysteria2; таймауты: TCP=10с, Xray=15с, повторы=2, тест скорости 512 КБ, мин. 500 KB/s, отсев по latency сразу после HTTP)")
     if not check_xray_available():
         logging.error("Xray-core обязателен. Завершение.")
         return
