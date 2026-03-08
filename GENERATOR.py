@@ -3,7 +3,7 @@
 # Добавлены протоколы VMess и Hysteria2, ужесточение критериев: HTTPS для TLS,
 # отсев по latency (TCP) сразу после первого этапа, упрощённый лог.
 # Оптимизация: флаг и город определяются сразу после TCP, реальная проверка только для серверов с флагом
-# Ускорение Xray: 30 потоков, задержка 1с, таймаут 15с, повторы 2, один тестовый URL
+# Ускорение Xray: 30 потоков, задержка 1с, таймаут 15с, все проверки однократные.
 
 import os
 import re
@@ -79,7 +79,6 @@ SOCKS_PORT = 8080
 REAL_CHECK_TIMEOUT = 15
 REAL_CHECK_CONCURRENCY = 30
 XRAY_STARTUP_DELAY = 1
-RETRY_COUNT = 2
 
 TEST_URLS = [
     "http://connectivitycheck.gstatic.com/generate_204"
@@ -581,7 +580,7 @@ def check_tcp(link):
     except:
         return (link, False, None, None)
 
-# ---------- РЕАЛЬНАЯ ПРОВЕРКА (без теста скорости) ----------
+# ---------- РЕАЛЬНАЯ ПРОВЕРКА (однократная, без повторов) ----------
 def check_real(link):
     config_dict = parse_link(link)
     if not config_dict:
@@ -618,39 +617,30 @@ def check_real(link):
                 if security in ('tls', 'reality'):
                     needs_https = True
 
-        # HTTP-проверка (с повторными попытками)
+        # Однократная HTTP-проверка (перебираем тестовые URL, пока один не сработает)
         http_success = False
-        for attempt in range(RETRY_COUNT + 1):
-            for test_url in TEST_URLS:
-                try:
-                    resp = requests.get(
-                        test_url, proxies=proxies, timeout=REAL_CHECK_TIMEOUT,
-                        headers={'User-Agent': USER_AGENT}, allow_redirects=False
-                    )
-                    http_success = True
-                    break
-                except Exception:
-                    continue
-            if http_success:
+        for test_url in TEST_URLS:
+            try:
+                resp = requests.get(
+                    test_url, proxies=proxies, timeout=REAL_CHECK_TIMEOUT,
+                    headers={'User-Agent': USER_AGENT}, allow_redirects=False
+                )
+                http_success = True
                 break
-            time.sleep(1)
+            except Exception:
+                continue
 
         if not http_success:
             return (link, False)
 
-        # Дополнительная проверка HTTPS (если нужна)
+        # Однократная дополнительная проверка HTTPS (если нужна)
         if needs_https:
-            https_ok = False
-            for attempt in range(2):
-                try:
-                    https_test = "https://www.google.com/generate_204"
-                    requests.get(https_test, proxies=proxies, timeout=REAL_CHECK_TIMEOUT,
-                                 headers={'User-Agent': USER_AGENT}, verify=False)
-                    https_ok = True
-                    break
-                except Exception:
-                    time.sleep(1)
-            if not https_ok:
+            try:
+                https_test = "https://www.google.com/generate_204"
+                requests.get(https_test, proxies=proxies, timeout=REAL_CHECK_TIMEOUT,
+                             headers={'User-Agent': USER_AGENT}, verify=False)
+                # если дошли до сюда – успех
+            except Exception:
                 return (link, False)
 
         # Все проверки пройдены
@@ -803,7 +793,7 @@ def check_xray_available():
 # ---------- ГЛАВНАЯ ФУНКЦИЯ ----------
 def main():
     global record_counter, current_check, total_checks
-    logging.info("🟢 Запуск генератора подписок (протоколы: Vless, SS, Trojan, VMess, Hysteria2; таймауты: TCP=10с, Xray=15с, повторы=2, отсев по TCP latency >500 мс)")
+    logging.info("🟢 Запуск генератора подписок (протоколы: Vless, SS, Trojan, VMess, Hysteria2; таймауты: TCP=10с, Xray=15с, отсев по TCP latency >500 мс, все проверки однократные)")
     if not check_xray_available():
         logging.error("Xray-core обязателен. Завершение.")
         return
