@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-# GENERATOR.py – Финальная версия с групповым логированием.
+# GENERATOR.py – Финальная версия с сортировкой: Россия -> остальные
 # Проверка реальных сайтов: только Google.
-# Чередование регионов: Россия, Европа, Америка, остальные – по кругу.
+# Чередование регионов заменено на приоритет России.
 
 import os
 import re
@@ -46,7 +46,7 @@ GEOIP_DB_URL = "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/G
 # ---------- TCP-проверка ----------
 TCP_CHECK_TIMEOUT = 10
 TCP_MAX_WORKERS = 400
-MAX_LATENCY_MS = 200
+MAX_LATENCY_MS = 250
 
 # ---------- TLS-проверка ----------
 TLS_CHECK_TIMEOUT = 1
@@ -818,40 +818,21 @@ def filter_working_links(links):
     logging.info(f"📊 Реальная проверка завершена. Рабочих: {len(working_links_with_geo)}/{stage_total}, OK {real_ok}, FAIL {real_fail}")
     return working_links_with_geo
 
-# ---------- ЧЕРЕДОВАНИЕ ПО РЕГИОНАМ ----------
-def interleave_regions(links_with_geo):
-    # Списки стран Европы и Америки (можно дополнить)
-    europe = ['AL','AD','AT','BY','BE','BA','BG','HR','CZ','DK','EE','FI','FR','DE','GR','HU','IS','IE','IT','LV','LT','LU','MT','MD','MC','ME','NL','MK','NO','PL','PT','RO','RS','SK','SI','ES','SE','CH','UA','GB','VA','RS']
-    americas = ['US','CA','MX','BR','AR','CL','CO','PE','VE','UY','PY','BO','EC','GY','SR','GF','PA','CR','NI','HN','SV','GT','BZ','DO','CU','HT','JM','TT','BS','BB','LC','VC','GD','AG','DM','KN','AW','CW','BQ','SX','MF','GP','MQ','YT','RE','GF','PM','BL','MF','WF','PF','NC','TF','GS','HM','BV']
-    
+# ---------- СОРТИРОВКА: СНАЧАЛА РОССИЯ, ПОТОМ ВСЕ ОСТАЛЬНЫЕ ----------
+def sort_by_region(links_with_geo):
+    """
+    Возвращает список, в котором сначала идут элементы с country_code == 'RU',
+    затем все остальные в исходном порядке.
+    """
     ru = []
-    eu = []
-    am = []
     other = []
-    
     for item in links_with_geo:
         cc = item[3]  # country_code
         if cc == 'RU':
             ru.append(item)
-        elif cc in europe:
-            eu.append(item)
-        elif cc in americas:
-            am.append(item)
         else:
             other.append(item)
-    
-    result = []
-    # Пока есть хотя бы один элемент в любой группе
-    while ru or eu or am or other:
-        if ru:
-            result.append(ru.pop(0))
-        if eu:
-            result.append(eu.pop(0))
-        if am:
-            result.append(am.pop(0))
-        if other:
-            result.append(other.pop(0))
-    return result
+    return ru + other
 
 # ---------- СОХРАНЕНИЕ ----------
 def save_working_links(links_with_geo):
@@ -860,8 +841,8 @@ def save_working_links(links_with_geo):
         logging.warning("Нет серверов для сохранения.")
         return 0
 
-    # Чередуем по регионам
-    sorted_links = interleave_regions(links_with_geo)
+    # Сортируем: сначала Россия, потом остальные
+    sorted_links = sort_by_region(links_with_geo)
 
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         f.write(f"#profile-title:{PROFILE_TITLE}\n")
@@ -909,7 +890,7 @@ def check_singbox_available():
 # ---------- ГЛАВНАЯ ----------
 def main():
     global record_counter, current_check, total_checks
-    logging.info("🟢 Запуск генератора подписок (протоколы: Vless, SS, Trojan, VMess, Hysteria2; таймауты: TCP=10с, TLS=5с, реальная=30с, задержка sing-box=5с, проверка на Google, чередование регионов)")
+    logging.info("🟢 Запуск генератора подписок (протоколы: Vless, SS, Trojan, VMess, Hysteria2; таймауты: TCP=10с, TLS=5с, реальная=30с, задержка sing-box=5с, проверка на Google, сортировка: Россия -> остальные)")
     if not check_singbox_available():
         logging.error("sing-box обязателен. Завершение.")
         return
