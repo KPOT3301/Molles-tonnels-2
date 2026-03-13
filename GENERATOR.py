@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# GENERATOR.py – Финальная версия с сортировкой: Россия -> остальные
+# GENERATOR.py – Финальная версия с фильтрацией только российских серверов
 # Проверка реальных сайтов: только Google.
 # Чередование регионов заменено на приоритет России.
 
@@ -741,8 +741,14 @@ def filter_working_links(links):
     if not geo_by_link:
         return []
 
-    # Этап 1.5: TLS
-    logging.info(f"🔒 Этап 1.5: TLS-проверка {len(geo_by_link)} ссылок...")
+    # ---------- ФИЛЬТР: ОСТАВЛЯЕМ ТОЛЬКО РОССИЮ ----------
+    ru_geo_by_link = {link: data for link, data in geo_by_link.items() if data[2] == 'RU'}  # data[2] = country_code
+    logging.info(f"🇷🇺 Российских серверов после гео: {len(ru_geo_by_link)}")
+    if not ru_geo_by_link:
+        return []
+
+    # Этап 1.5: TLS (только для RU)
+    logging.info(f"🔒 Этап 1.5: TLS-проверка {len(ru_geo_by_link)} ссылок...")
     tls_passed = []  # (link, flag, city, country_code, parsed)
     tls_futures = {}
     tls_processed = 0
@@ -750,7 +756,7 @@ def filter_working_links(links):
     tls_fail = 0
 
     with ThreadPoolExecutor(max_workers=TLS_MAX_WORKERS) as executor:
-        for link, (flag, city, country_code, parsed) in geo_by_link.items():
+        for link, (flag, city, country_code, parsed) in ru_geo_by_link.items():
             if parsed and needs_tls_check(parsed):
                 host = parsed['host']
                 port = parsed['port']
@@ -779,7 +785,7 @@ def filter_working_links(links):
     if not tls_passed:
         return []
 
-    # Этап 2: реальная проверка
+    # Этап 2: реальная проверка (только для RU)
     logging.info(f"🧪 Этап 2: Реальная проверка {len(tls_passed)} ссылок (быстрые URL + Google)...")
     working_links_with_geo = []  # (link, flag, city, country_code)
     stage_total = len(tls_passed)
@@ -818,22 +824,6 @@ def filter_working_links(links):
     logging.info(f"📊 Реальная проверка завершена. Рабочих: {len(working_links_with_geo)}/{stage_total}, OK {real_ok}, FAIL {real_fail}")
     return working_links_with_geo
 
-# ---------- СОРТИРОВКА: СНАЧАЛА РОССИЯ, ПОТОМ ВСЕ ОСТАЛЬНЫЕ ----------
-def sort_by_region(links_with_geo):
-    """
-    Возвращает список, в котором сначала идут элементы с country_code == 'RU',
-    затем все остальные в исходном порядке.
-    """
-    ru = []
-    other = []
-    for item in links_with_geo:
-        cc = item[3]  # country_code
-        if cc == 'RU':
-            ru.append(item)
-        else:
-            other.append(item)
-    return ru + other
-
 # ---------- СОХРАНЕНИЕ ----------
 def save_working_links(links_with_geo):
     logging.info(f"💾 Сохраняю {len(links_with_geo)} серверов с геоданными...")
@@ -841,24 +831,22 @@ def save_working_links(links_with_geo):
         logging.warning("Нет серверов для сохранения.")
         return 0
 
-    # Сортируем: сначала Россия, потом остальные
-    sorted_links = sort_by_region(links_with_geo)
-
+    # Все ссылки уже российские, сортировка не требуется
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         f.write(f"#profile-title:{PROFILE_TITLE}\n")
         f.write(f"#subscription-userinfo:{SUBSCRIPTION_USERINFO}\n")
         f.write(f"#profile-update-interval:{PROFILE_UPDATE_INTERVAL}\n")
         f.write(f"#support-url:{SUPPORT_URL}\n")
         f.write(f"#profile-web-page-url:{PROFILE_WEB_PAGE_URL}\n")
-        f.write(f"#announce: АКТИВНЫХ ТОННЕЛЕЙ 🚀 {len(sorted_links)} | ОБНОВЛЕНО 📅 {TODAY_STR}\n")
-        for idx, (link, flag, city, _) in enumerate(sorted_links, 1):
+        f.write(f"#announce: АКТИВНЫХ ТОННЕЛЕЙ 🚀 {len(links_with_geo)} | ОБНОВЛЕНО 📅 {TODAY_STR}\n")
+        for idx, (link, flag, city, _) in enumerate(links_with_geo, 1):
             link_clean = re.sub(r'#.*$', '', link)
             city_part = f" {city}" if city else ""
             tag = f"#🔑📱ТОННЕЛЬ {idx:04d} | {flag}{city_part} |"
             f.write(link_clean + tag + '\n')
 
-    logging.info(f"✅ Сохранено {len(sorted_links)} серверов в {OUTPUT_FILE}")
-    return len(sorted_links)
+    logging.info(f"✅ Сохранено {len(links_with_geo)} серверов в {OUTPUT_FILE}")
+    return len(links_with_geo)
 
 def create_base64_subscription():
     try:
@@ -890,7 +878,7 @@ def check_singbox_available():
 # ---------- ГЛАВНАЯ ----------
 def main():
     global record_counter, current_check, total_checks
-    logging.info("🟢 Запуск генератора подписок (протоколы: Vless, SS, Trojan, VMess, Hysteria2; таймауты: TCP=10с, TLS=5с, реальная=30с, задержка sing-box=5с, проверка на Google, сортировка: Россия -> остальные)")
+    logging.info("🟢 Запуск генератора подписок (протоколы: Vless, SS, Trojan, VMess, Hysteria2; таймауты: TCP=10с, TLS=5с, реальная=30с, задержка sing-box=5с, проверка на Google, фильтрация: только Россия)")
     if not check_singbox_available():
         logging.error("sing-box обязателен. Завершение.")
         return
