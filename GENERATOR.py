@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-# GENERATOR.py – Финальная версия с фильтрацией серверов, у которых есть флаг
-# (убрано ограничение только на Россию, оставлены все страны)
+# GENERATOR.py – Финальная версия с фильтрацией:
+# - оставляем только серверы, для которых удалось определить страну (есть флаг)
+# - исключаем Северную Америку (NA), Южную Америку (SA) и Китай (CN)
 # Проверка реальных сайтов: только Google.
 
 import os
@@ -161,17 +162,18 @@ if ensure_geoip_db():
         logging.error(f"❌ Не удалось открыть базу GeoIP: {e}")
 
 def get_geo_info(ip):
-    """Возвращает (флаг, город, код страны)"""
+    """Возвращает (флаг, город, код страны, код континента)"""
     if reader is None:
-        return "", "", ""
+        return "", "", "", ""
     try:
         response = reader.city(ip)
         country_code = response.country.iso_code
         city = response.city.name if response.city.name else ""
         flag = ''.join(chr(127397 + ord(c)) for c in country_code.upper()) if country_code else ""
-        return flag, city, country_code
+        continent_code = response.continent.code if response.continent else ""
+        return flag, city, country_code, continent_code
     except Exception:
-        return "", "", ""
+        return "", "", "", ""
 
 # ---------- ВСПОМОГАТЕЛЬНЫЕ ----------
 @lru_cache(maxsize=256)
@@ -707,7 +709,7 @@ def check_with_singbox(link, fast_urls, real_urls, fast_timeout=REAL_CHECK_TIMEO
         if os.path.exists(config_path):
             os.unlink(config_path)
 
-# ---------- ФИЛЬТРАЦИЯ (ИЗМЕНЕНО: УБРАН ФИЛЬТР ПО РОССИИ, ОСТАВЛЕНЫ ВСЕ СЕРВЕРЫ С ФЛАГАМИ) ----------
+# ---------- ФИЛЬТРАЦИЯ (ИЗМЕНЕНО: исключаем NA, SA и CN) ----------
 def filter_working_links(links):
     global record_counter, current_check, total_checks
     total_checks = len(links)
@@ -732,19 +734,28 @@ def filter_working_links(links):
     logging.info(f"🌍 Определение геоданных для {len(tcp_success)} серверов...")
     geo_by_link = {}
     for link, ip, _ in tcp_success:
-        flag, city, country_code = get_geo_info(ip) if ip else ("", "", "")
+        flag, city, country_code, continent_code = get_geo_info(ip) if ip else ("", "", "", "")
         if flag:
             parsed = parse_link(link)
-            geo_by_link[link] = (flag, city, country_code, parsed)
+            geo_by_link[link] = (flag, city, country_code, continent_code, parsed)
 
     logging.info(f"🧾 Серверов с флагами: {len(geo_by_link)}")
     if not geo_by_link:
         return []
 
-    # ---------- УБРАН ФИЛЬТР ПО РОССИИ ----------
-    # Работаем со всеми серверами, у которых есть флаг
+    # Фильтр: исключаем Северную Америку (NA), Южную Америку (SA) и Китай (CN)
+    filtered_geo = {}
+    for link, data in geo_by_link.items():
+        flag, city, country_code, continent_code, parsed = data
+        if continent_code in ('NA', 'SA') or country_code == 'CN':
+            continue
+        filtered_geo[link] = data
+    logging.info(f"🧾 Серверов после исключения Америки (NA, SA) и Китая (CN): {len(filtered_geo)}")
+    geo_by_link = filtered_geo
+    if not geo_by_link:
+        return []
 
-    # Этап 1.5: TLS (для всех серверов с гео)
+    # Этап 1.5: TLS (для всех прошедших фильтр)
     logging.info(f"🔒 Этап 1.5: TLS-проверка {len(geo_by_link)} ссылок...")
     tls_passed = []  # (link, flag, city, country_code, parsed)
     tls_futures = {}
@@ -753,7 +764,7 @@ def filter_working_links(links):
     tls_fail = 0
 
     with ThreadPoolExecutor(max_workers=TLS_MAX_WORKERS) as executor:
-        for link, (flag, city, country_code, parsed) in geo_by_link.items():
+        for link, (flag, city, country_code, continent_code, parsed) in geo_by_link.items():
             if parsed and needs_tls_check(parsed):
                 host = parsed['host']
                 port = parsed['port']
@@ -875,7 +886,7 @@ def check_singbox_available():
 # ---------- ГЛАВНАЯ ----------
 def main():
     global record_counter, current_check, total_checks
-    logging.info("🟢 Запуск генератора подписок (протоколы: Vless, SS, Trojan, VMess, Hysteria2; таймауты: TCP=10с, TLS=5с, реальная=30с, задержка sing-box=7с, проверка на Google, фильтрация: только серверы с определённым флагом (все страны))")
+    logging.info("🟢 Запуск генератора подписок (протоколы: Vless, SS, Trojan, VMess, Hysteria2; таймауты: TCP=10с, TLS=5с, реальная=30с, задержка sing-box=7с, проверка на Google, фильтрация: только серверы с флагами, исключая NA, SA и CN)")
     if not check_singbox_available():
         logging.error("sing-box обязателен. Завершение.")
         return
