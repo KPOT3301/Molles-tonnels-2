@@ -44,6 +44,7 @@ https://raw.githubusercontent.com/LimeHi/LimeVPNGenerator/main/Keys.txt?v=1
 
 # openray
 https://github.com/nikita29a/FreeProxyList/raw/refs/heads/main/mirror/1.txt
+https://raw.githubusercontent.com/sakha1370/OpenRay/refs/heads/main/output/country/RU.txt
 
 # igareck
 https://raw.githubusercontent.com/kort0881/vpn-checker-backend/main/checked/RU_Best/ru_white_all_part1.txt
