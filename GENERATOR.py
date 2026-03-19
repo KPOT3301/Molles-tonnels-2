@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-# GENERATOR.py – Финальная версия с фильтрацией только российских серверов
+# GENERATOR.py – Финальная версия с фильтрацией серверов, у которых есть флаг
+# (убрано ограничение только на Россию, оставлены все страны)
 # Проверка реальных сайтов: только Google.
-# Чередование регионов заменено на приоритет России.
 
 import os
 import re
@@ -707,7 +707,7 @@ def check_with_singbox(link, fast_urls, real_urls, fast_timeout=REAL_CHECK_TIMEO
         if os.path.exists(config_path):
             os.unlink(config_path)
 
-# ---------- ФИЛЬТРАЦИЯ ----------
+# ---------- ФИЛЬТРАЦИЯ (ИЗМЕНЕНО: УБРАН ФИЛЬТР ПО РОССИИ, ОСТАВЛЕНЫ ВСЕ СЕРВЕРЫ С ФЛАГАМИ) ----------
 def filter_working_links(links):
     global record_counter, current_check, total_checks
     total_checks = len(links)
@@ -741,14 +741,11 @@ def filter_working_links(links):
     if not geo_by_link:
         return []
 
-    # ---------- ФИЛЬТР: ОСТАВЛЯЕМ ТОЛЬКО РОССИЮ ----------
-    ru_geo_by_link = {link: data for link, data in geo_by_link.items() if data[2] == 'RU'}  # data[2] = country_code
-    logging.info(f"🇷🇺 Российских серверов после гео: {len(ru_geo_by_link)}")
-    if not ru_geo_by_link:
-        return []
+    # ---------- УБРАН ФИЛЬТР ПО РОССИИ ----------
+    # Работаем со всеми серверами, у которых есть флаг
 
-    # Этап 1.5: TLS (только для RU)
-    logging.info(f"🔒 Этап 1.5: TLS-проверка {len(ru_geo_by_link)} ссылок...")
+    # Этап 1.5: TLS (для всех серверов с гео)
+    logging.info(f"🔒 Этап 1.5: TLS-проверка {len(geo_by_link)} ссылок...")
     tls_passed = []  # (link, flag, city, country_code, parsed)
     tls_futures = {}
     tls_processed = 0
@@ -756,7 +753,7 @@ def filter_working_links(links):
     tls_fail = 0
 
     with ThreadPoolExecutor(max_workers=TLS_MAX_WORKERS) as executor:
-        for link, (flag, city, country_code, parsed) in ru_geo_by_link.items():
+        for link, (flag, city, country_code, parsed) in geo_by_link.items():
             if parsed and needs_tls_check(parsed):
                 host = parsed['host']
                 port = parsed['port']
@@ -785,7 +782,7 @@ def filter_working_links(links):
     if not tls_passed:
         return []
 
-    # Этап 2: реальная проверка (только для RU)
+    # Этап 2: реальная проверка (для всех прошедших TLS)
     logging.info(f"🧪 Этап 2: Реальная проверка {len(tls_passed)} ссылок (быстрые URL + Google)...")
     working_links_with_geo = []  # (link, flag, city, country_code)
     stage_total = len(tls_passed)
@@ -831,7 +828,7 @@ def save_working_links(links_with_geo):
         logging.warning("Нет серверов для сохранения.")
         return 0
 
-    # Все ссылки уже российские, сортировка не требуется
+    # Все ссылки уже с флагами, сортировка не требуется (или можно добавить по желанию)
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         f.write(f"#profile-title:{PROFILE_TITLE}\n")
         f.write(f"#subscription-userinfo:{SUBSCRIPTION_USERINFO}\n")
@@ -878,7 +875,7 @@ def check_singbox_available():
 # ---------- ГЛАВНАЯ ----------
 def main():
     global record_counter, current_check, total_checks
-    logging.info("🟢 Запуск генератора подписок (протоколы: Vless, SS, Trojan, VMess, Hysteria2; таймауты: TCP=10с, TLS=5с, реальная=30с, задержка sing-box=5с, проверка на Google, фильтрация: только Россия)")
+    logging.info("🟢 Запуск генератора подписок (протоколы: Vless, SS, Trojan, VMess, Hysteria2; таймауты: TCP=10с, TLS=5с, реальная=30с, задержка sing-box=7с, проверка на Google, фильтрация: только серверы с определённым флагом (все страны))")
     if not check_singbox_available():
         logging.error("sing-box обязателен. Завершение.")
         return
