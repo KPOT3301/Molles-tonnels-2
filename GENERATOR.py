@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # GENERATOR.py – Финальная версия с фильтрацией:
 # - оставляем только серверы, для которых удалось определить страну (есть флаг)
-# - исключаем Северную Америку (NA), Южную Америку (SA) и Китай (CN)
+# - оставляем только серверы в России (RU) и Европе (EU)
 # Проверка реальных сайтов: только Google.
 
 import os
@@ -709,7 +709,7 @@ def check_with_singbox(link, fast_urls, real_urls, fast_timeout=REAL_CHECK_TIMEO
         if os.path.exists(config_path):
             os.unlink(config_path)
 
-# ---------- ФИЛЬТРАЦИЯ (ИЗМЕНЕНО: исключаем NA, SA и CN) ----------
+# ---------- ФИЛЬТРАЦИЯ (ИЗМЕНЕНО: оставляем только RU и EU) ----------
 def filter_working_links(links):
     global record_counter, current_check, total_checks
     total_checks = len(links)
@@ -743,14 +743,13 @@ def filter_working_links(links):
     if not geo_by_link:
         return []
 
-    # Фильтр: исключаем Северную Америку (NA), Южную Америку (SA) и Китай (CN)
+    # Фильтр: оставляем только Россию (RU) и Европу (EU)
     filtered_geo = {}
     for link, data in geo_by_link.items():
         flag, city, country_code, continent_code, parsed = data
-        if continent_code in ('NA', 'SA') or country_code == 'CN':
-            continue
-        filtered_geo[link] = data
-    logging.info(f"🧾 Серверов после исключения Америки (NA, SA) и Китая (CN): {len(filtered_geo)}")
+        if (country_code == 'RU') or (continent_code == 'EU'):
+            filtered_geo[link] = data
+    logging.info(f"🧾 Серверов после фильтрации (только RU и EU): {len(filtered_geo)}")
     geo_by_link = filtered_geo
     if not geo_by_link:
         return []
@@ -886,7 +885,7 @@ def check_singbox_available():
 # ---------- ГЛАВНАЯ ----------
 def main():
     global record_counter, current_check, total_checks
-    logging.info("🟢 Запуск генератора подписок (протоколы: Vless, SS, Trojan, VMess, Hysteria2; таймауты: TCP=10с, TLS=5с, реальная=30с, задержка sing-box=7с, проверка на Google, фильтрация: только серверы с флагами, исключая NA, SA и CN)")
+    logging.info("🟢 Запуск генератора подписок (протоколы: Vless, SS, Trojan, VMess, Hysteria2; таймауты: TCP=10с, TLS=5с, реальная=30с, задержка sing-box=7с, проверка на Google, фильтрация: только серверы с флагами, оставляем только Россию (RU) и Европу (EU))")
     if not check_singbox_available():
         logging.error("sing-box обязателен. Завершение.")
         return
