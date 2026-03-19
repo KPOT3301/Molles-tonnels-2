@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GENERATOR.py – Ультра-усиленная версия с 5-кратными TCP/TLS проверками и одной реальной проверкой на 5 сайтов
-# Поддерживает Россию и все европейские страны.
+# Поддерживает только Россию (RU).
 # Проверка реальных сайтов: Google, Facebook, Telegram, YouTube, WhatsApp (один раунд).
 
 import os
@@ -33,24 +33,15 @@ REQUEST_TIMEOUT = 10
 SING_BOX_PATH = "./sing-box"
 
 # ---------- Настройки подписки ----------
-PROFILE_TITLE = "🇷🇺🇪🇺КРОТовыеТОННЕЛИ🇪🇺🇷🇺"
-SUPPORT_URL = "https://t.me/krotovye_tonneli"
-PROFILE_WEB_PAGE_URL = "https://t.me/krotovye_tonneli"
-PROFILE_UPDATE_INTERVAL = "1"
-SUBSCRIPTION_USERINFO = "upload=0; download=0; total=0; expire=0"
+PROFILE_TITLE = "🇷🇺КРОТтовые ТОННЕЛИ🇷🇺"                     # Изменено по вашему запросу
+SUPPORT_URL = "🇷🇺КРОТтовые ТОННЕЛИ🇷🇺"                       # Изменено по вашему запросу
+PROFILE_WEB_PAGE_URL = "🇷🇺КРОТтовые ТОННЕЛИ🇷🇺"              # Изменено для единообразия
+PROFILE_UPDATE_INTERVAL = "1"                                # Оставлено как есть
+SUBSCRIPTION_USERINFO = "upload=0; download=0; total=0; expire=0"  # Оставлено как есть
 
 # ---------- Геоданные ----------
 GEOIP_DB_PATH = "GeoLite2-City.mmdb"
 GEOIP_DB_URL = "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-City.mmdb"
-
-# Список европейских стран (ISO коды)
-EU_COUNTRIES = {
-    'AL', 'AD', 'AM', 'AT', 'AZ', 'BY', 'BE', 'BA', 'BG', 'HR', 'CY', 'CZ',
-    'DK', 'EE', 'FI', 'FR', 'GE', 'DE', 'GR', 'HU', 'IS', 'IE', 'IT', 'KZ',
-    'XK', 'LV', 'LI', 'LT', 'LU', 'MT', 'MD', 'MC', 'ME', 'NL', 'MK', 'NO',
-    'PL', 'PT', 'RO', 'RU', 'SM', 'RS', 'SK', 'SI', 'ES', 'SE', 'CH', 'TR',
-    'UA', 'GB', 'VA'
-}
 
 # ---------- TCP-проверка ----------
 TCP_CHECK_TIMEOUT = 10
@@ -726,7 +717,7 @@ def filter_working_links(links):
     global record_counter, current_check, total_checks
     total_checks = len(links)
     logging.info(f"🚀 Начинаю УЛЬТРА-УСИЛЕННУЮ проверку {total_checks} ссылок (TCP x5, TLS x5, реальная x1 на 5 сайтов)")
-    logging.info(f"🌍 Фильтр по гео: Россия + все страны Европы")
+    logging.info(f"🌍 Фильтр по гео: только Россия")
 
     # ---------- TCP раунды 1-5 ----------
     tcp_current = [(link, None, None) for link in links]  # (link, ip, latency) - пока без ip и latency
@@ -749,7 +740,7 @@ def filter_working_links(links):
     if not tcp_current:
         return []
 
-    # ---------- Геоданные и фильтр (Россия + Европа) ----------
+    # ---------- Геоданные и фильтр (только Россия) ----------
     logging.info(f"🌍 Определение геоданных для {len(tcp_current)} серверов...")
     geo_by_link = {}
     for link, ip, latency in tcp_current:
@@ -762,9 +753,9 @@ def filter_working_links(links):
     if not geo_by_link:
         return []
 
-    # Фильтр: Россия + Европа
-    allowed_geo = {link: data for link, data in geo_by_link.items() if data[2] in EU_COUNTRIES}
-    logging.info(f"🇷🇺🇪🇺 Серверов России и Европы после гео: {len(allowed_geo)}")
+    # Фильтр: только Россия (RU)
+    allowed_geo = {link: data for link, data in geo_by_link.items() if data[2] == 'RU'}
+    logging.info(f"🇷🇺 Серверов России после гео: {len(allowed_geo)}")
     if not allowed_geo:
         return []
 
@@ -867,7 +858,7 @@ def save_working_links(links_with_geo):
         f.write(f"#profile-update-interval:{PROFILE_UPDATE_INTERVAL}\n")
         f.write(f"#support-url:{SUPPORT_URL}\n")
         f.write(f"#profile-web-page-url:{PROFILE_WEB_PAGE_URL}\n")
-        f.write(f"#announce: АКТИВНЫХ ТОННЕЛЕЙ 🚀 {len(links_with_geo)} | ОБНОВЛЕНО 📅 {TODAY_STR}\n")
+        f.write(f"#announce: АКТИВНЫХ ТОННЕЛЕЙ 🚀 {len(links_with_geo)} | ОБНОВЛЕНО 📅 {TODAY_STR}\n")  # ← строка анонса на месте
         for idx, (link, flag, city, country_code) in enumerate(links_with_geo, 1):
             link_clean = re.sub(r'#.*$', '', link)
             city_part = f" {city}" if city else ""
@@ -908,7 +899,7 @@ def check_singbox_available():
 # ---------- ГЛАВНАЯ ----------
 def main():
     global record_counter, current_check, total_checks
-    logging.info("🟢 Запуск УЛЬТРА-УСИЛЕННОГО генератора подписок (TCP x5, TLS x5, реальная x1 на Google, Facebook, Telegram, YouTube, WhatsApp; фильтрация: Россия + Европа)")
+    logging.info("🟢 Запуск УЛЬТРА-УСИЛЕННОГО генератора подписок (TCP x5, TLS x5, реальная x1 на Google, Facebook, Telegram, YouTube, WhatsApp; фильтрация: только Россия)")
     if not check_singbox_available():
         logging.error("sing-box обязателен. Завершение.")
         return
