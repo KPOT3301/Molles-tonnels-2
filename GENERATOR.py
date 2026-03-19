@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-# GENERATOR.py – Усиленная версия с двойными TCP/TLS проверками и тремя реальными сайтами
-# Проверка реальных сайтов: Google, Facebook, Telegram.
-# Чередование регионов заменено на приоритет России.
+# GENERATOR.py – Ультра-усиленная версия с тройными TCP/TLS/реальными проверками
+# Поддерживает Россию и все европейские страны.
+# Проверка реальных сайтов: Google, Facebook, Telegram (три раунда).
 
 import os
 import re
@@ -33,15 +33,24 @@ REQUEST_TIMEOUT = 10
 SING_BOX_PATH = "./sing-box"
 
 # ---------- Настройки подписки ----------
-PROFILE_TITLE = "🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
-SUPPORT_URL = "🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
-PROFILE_WEB_PAGE_URL = "🇷🇺КРОТовыеТОННЕЛИ🇷🇺"
+PROFILE_TITLE = "🇷🇺🇪🇺КРОТовыеТОННЕЛИ🇪🇺🇷🇺"
+SUPPORT_URL = "https://t.me/krotovye_tonneli"
+PROFILE_WEB_PAGE_URL = "https://t.me/krotovye_tonneli"
 PROFILE_UPDATE_INTERVAL = "1"
 SUBSCRIPTION_USERINFO = "upload=0; download=0; total=0; expire=0"
 
 # ---------- Геоданные ----------
 GEOIP_DB_PATH = "GeoLite2-City.mmdb"
 GEOIP_DB_URL = "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-City.mmdb"
+
+# Список европейских стран (ISO коды)
+EU_COUNTRIES = {
+    'AL', 'AD', 'AM', 'AT', 'AZ', 'BY', 'BE', 'BA', 'BG', 'HR', 'CY', 'CZ',
+    'DK', 'EE', 'FI', 'FR', 'GE', 'DE', 'GR', 'HU', 'IS', 'IE', 'IT', 'KZ',
+    'XK', 'LV', 'LI', 'LT', 'LU', 'MT', 'MD', 'MC', 'ME', 'NL', 'MK', 'NO',
+    'PL', 'PT', 'RO', 'RU', 'SM', 'RS', 'SK', 'SI', 'ES', 'SE', 'CH', 'TR',
+    'UA', 'GB', 'VA'
+}
 
 # ---------- TCP-проверка ----------
 TCP_CHECK_TIMEOUT = 10
@@ -64,7 +73,6 @@ FAST_TEST_URLS = [
     "http://connectivitycheck.gstatic.com/generate_204",
     "http://www.gstatic.com/generate_204"
 ]
-# Три реальных сайта для проверки
 REAL_SITES = [
     "https://www.google.com/generate_204",
     "https://www.facebook.com/",
@@ -710,47 +718,62 @@ def check_with_singbox(link, fast_urls, real_urls, fast_timeout=REAL_CHECK_TIMEO
         if os.path.exists(config_path):
             os.unlink(config_path)
 
-# ---------- ФИЛЬТРАЦИЯ (УСИЛЕННАЯ) ----------
+# ---------- ФИЛЬТРАЦИЯ (УЛЬТРА-УСИЛЕННАЯ, РОССИЯ + ЕВРОПА) ----------
 def filter_working_links(links):
     global record_counter, current_check, total_checks
     total_checks = len(links)
-    logging.info(f"🚀 Начинаю УСИЛЕННУЮ проверку {total_checks} ссылок (TCP x2, TLS x2, 3 сайта)")
+    logging.info(f"🚀 Начинаю УЛЬТРА-УСИЛЕННУЮ проверку {total_checks} ссылок (TCP x3, TLS x3, реальная x3, 3 сайта)")
+    logging.info(f"🌍 Фильтр по гео: Россия + все страны Европы")
 
-    # ---------- Этап 1: первая TCP проверка ----------
+    # ---------- Этап 1: TCP раунд 1 ----------
     logging.info(f"🌐 Этап 1 (TCP #1): проверка {total_checks} ссылок...")
-    tcp_first = []
+    tcp_round1 = []
     with ThreadPoolExecutor(max_workers=TCP_MAX_WORKERS) as executor:
         future_to_link = {executor.submit(check_tcp, link): link for link in links}
         for future in as_completed(future_to_link):
             current_check += 1
             link, ok, ip, latency = future.result()
             if ok and ip and latency is not None and latency <= MAX_LATENCY_MS:
-                tcp_first.append((link, ip, latency))
-    logging.info(f"📊 TCP #1 завершена. Прошли (latency <= {MAX_LATENCY_MS} мс): {len(tcp_first)}/{total_checks}")
+                tcp_round1.append((link, ip, latency))
+    logging.info(f"📊 TCP #1 завершена. Прошли (latency <= {MAX_LATENCY_MS} мс): {len(tcp_round1)}/{total_checks}")
 
-    if not tcp_first:
+    if not tcp_round1:
         return []
 
-    # ---------- Этап 2: вторая TCP проверка ----------
-    logging.info(f"🌐 Этап 2 (TCP #2): повторная проверка {len(tcp_first)} ссылок...")
-    tcp_second = []  # (link, ip, latency)
+    # ---------- Этап 2: TCP раунд 2 ----------
+    logging.info(f"🌐 Этап 2 (TCP #2): повторная проверка {len(tcp_round1)} ссылок...")
+    tcp_round2 = []
     with ThreadPoolExecutor(max_workers=TCP_MAX_WORKERS) as executor:
-        future_to_link = {executor.submit(check_tcp, link): link for link, _, _ in tcp_first}
+        future_to_link = {executor.submit(check_tcp, link): link for link, _, _ in tcp_round1}
         for future in as_completed(future_to_link):
             link, ok, ip, latency = future.result()
             if ok and ip and latency is not None and latency <= MAX_LATENCY_MS:
-                tcp_second.append((link, ip, latency))
-    logging.info(f"📊 TCP #2 завершена. Прошли повторно: {len(tcp_second)}/{len(tcp_first)}")
+                tcp_round2.append((link, ip, latency))
+    logging.info(f"📊 TCP #2 завершена. Прошли повторно: {len(tcp_round2)}/{len(tcp_round1)}")
 
-    if not tcp_second:
+    if not tcp_round2:
         return []
 
-    # ---------- Этап 3: геоданные и фильтр России ----------
-    logging.info(f"🌍 Определение геоданных для {len(tcp_second)} серверов...")
+    # ---------- Этап 3: TCP раунд 3 ----------
+    logging.info(f"🌐 Этап 3 (TCP #3): третья проверка {len(tcp_round2)} ссылок...")
+    tcp_round3 = []
+    with ThreadPoolExecutor(max_workers=TCP_MAX_WORKERS) as executor:
+        future_to_link = {executor.submit(check_tcp, link): link for link, _, _ in tcp_round2}
+        for future in as_completed(future_to_link):
+            link, ok, ip, latency = future.result()
+            if ok and ip and latency is not None and latency <= MAX_LATENCY_MS:
+                tcp_round3.append((link, ip, latency))
+    logging.info(f"📊 TCP #3 завершена. Прошли третий раз: {len(tcp_round3)}/{len(tcp_round2)}")
+
+    if not tcp_round3:
+        return []
+
+    # ---------- Этап 4: геоданные и фильтр (Россия + Европа) ----------
+    logging.info(f"🌍 Определение геоданных для {len(tcp_round3)} серверов...")
     geo_by_link = {}
-    for link, ip, latency in tcp_second:
+    for link, ip, latency in tcp_round3:
         flag, city, country_code = get_geo_info(ip) if ip else ("", "", "")
-        if flag:
+        if flag and country_code:
             parsed = parse_link(link)
             geo_by_link[link] = (flag, city, country_code, parsed, latency)
 
@@ -758,22 +781,22 @@ def filter_working_links(links):
     if not geo_by_link:
         return []
 
-    # Оставляем только Россию
-    ru_geo = {link: data for link, data in geo_by_link.items() if data[2] == 'RU'}
-    logging.info(f"🇷🇺 Российских серверов после гео: {len(ru_geo)}")
-    if not ru_geo:
+    # Фильтр: Россия + Европа
+    allowed_geo = {link: data for link, data in geo_by_link.items() if data[2] in EU_COUNTRIES}
+    logging.info(f"🇷🇺🇪🇺 Серверов России и Европы после гео: {len(allowed_geo)}")
+    if not allowed_geo:
         return []
 
-    # ---------- Этап 4: первая TLS проверка ----------
-    logging.info(f"🔒 Этап 4 (TLS #1): проверка {len(ru_geo)} ссылок...")
-    tls_first = []  # (link, flag, city, country_code, parsed)
+    # ---------- Этап 5: TLS раунд 1 ----------
+    logging.info(f"🔒 Этап 5 (TLS #1): проверка {len(allowed_geo)} ссылок...")
+    tls_round1 = []  # (link, flag, city, country_code, parsed)
     tls_futures = {}
     tls_processed = 0
     tls_ok = 0
     tls_fail = 0
 
     with ThreadPoolExecutor(max_workers=TLS_MAX_WORKERS) as executor:
-        for link, (flag, city, country_code, parsed, latency) in ru_geo.items():
+        for link, (flag, city, country_code, parsed, latency) in allowed_geo.items():
             if parsed and needs_tls_check(parsed):
                 host = parsed['host']
                 port = parsed['port']
@@ -781,7 +804,7 @@ def filter_working_links(links):
                 future = executor.submit(check_tls, host, port, sni)
                 tls_futures[future] = (link, flag, city, country_code, parsed)
             else:
-                tls_first.append((link, flag, city, country_code, parsed))
+                tls_round1.append((link, flag, city, country_code, parsed))
                 tls_processed += 1
                 tls_ok += 1
 
@@ -789,7 +812,7 @@ def filter_working_links(links):
             tls_processed += 1
             link, flag, city, country_code, parsed = tls_futures[future]
             if future.result():
-                tls_first.append((link, flag, city, country_code, parsed))
+                tls_round1.append((link, flag, city, country_code, parsed))
                 tls_ok += 1
             else:
                 tls_fail += 1
@@ -797,19 +820,19 @@ def filter_working_links(links):
                 logging.info(f"TLS #1 прогресс: обработано {tls_processed}, OK {tls_ok}, FAIL {tls_fail}")
 
     logging.info(f"✅ TLS #1 завершена. OK {tls_ok}, FAIL {tls_fail}, всего {tls_processed}")
-    if not tls_first:
+    if not tls_round1:
         return []
 
-    # ---------- Этап 5: вторая TLS проверка ----------
-    logging.info(f"🔒 Этап 5 (TLS #2): повторная проверка {len(tls_first)} ссылок...")
-    tls_second = []
+    # ---------- Этап 6: TLS раунд 2 ----------
+    logging.info(f"🔒 Этап 6 (TLS #2): повторная проверка {len(tls_round1)} ссылок...")
+    tls_round2 = []
     tls2_futures = {}
     tls2_processed = 0
     tls2_ok = 0
     tls2_fail = 0
 
     with ThreadPoolExecutor(max_workers=TLS_MAX_WORKERS) as executor:
-        for link, flag, city, country_code, parsed in tls_first:
+        for link, flag, city, country_code, parsed in tls_round1:
             if parsed and needs_tls_check(parsed):
                 host = parsed['host']
                 port = parsed['port']
@@ -817,7 +840,7 @@ def filter_working_links(links):
                 future = executor.submit(check_tls, host, port, sni)
                 tls2_futures[future] = (link, flag, city, country_code, parsed)
             else:
-                tls_second.append((link, flag, city, country_code, parsed))
+                tls_round2.append((link, flag, city, country_code, parsed))
                 tls2_processed += 1
                 tls2_ok += 1
 
@@ -825,7 +848,7 @@ def filter_working_links(links):
             tls2_processed += 1
             link, flag, city, country_code, parsed = tls2_futures[future]
             if future.result():
-                tls_second.append((link, flag, city, country_code, parsed))
+                tls_round2.append((link, flag, city, country_code, parsed))
                 tls2_ok += 1
             else:
                 tls2_fail += 1
@@ -833,18 +856,54 @@ def filter_working_links(links):
                 logging.info(f"TLS #2 прогресс: обработано {tls2_processed}, OK {tls2_ok}, FAIL {tls2_fail}")
 
     logging.info(f"✅ TLS #2 завершена. OK {tls2_ok}, FAIL {tls2_fail}, всего {tls2_processed}")
-    if not tls_second:
+    if not tls_round2:
         return []
 
-    # ---------- Этап 6: реальная проверка (3 сайта) ----------
-    logging.info(f"🧪 Этап 6: Реальная проверка {len(tls_second)} ссылок (быстрые URL + Google, Facebook, Telegram)...")
-    working_links_with_geo = []  # (link, flag, city, country_code)
-    stage_total = len(tls_second)
+    # ---------- Этап 7: TLS раунд 3 ----------
+    logging.info(f"🔒 Этап 7 (TLS #3): третья проверка {len(tls_round2)} ссылок...")
+    tls_round3 = []
+    tls3_futures = {}
+    tls3_processed = 0
+    tls3_ok = 0
+    tls3_fail = 0
+
+    with ThreadPoolExecutor(max_workers=TLS_MAX_WORKERS) as executor:
+        for link, flag, city, country_code, parsed in tls_round2:
+            if parsed and needs_tls_check(parsed):
+                host = parsed['host']
+                port = parsed['port']
+                sni = parsed.get('sni', host)
+                future = executor.submit(check_tls, host, port, sni)
+                tls3_futures[future] = (link, flag, city, country_code, parsed)
+            else:
+                tls_round3.append((link, flag, city, country_code, parsed))
+                tls3_processed += 1
+                tls3_ok += 1
+
+        for future in as_completed(tls3_futures):
+            tls3_processed += 1
+            link, flag, city, country_code, parsed = tls3_futures[future]
+            if future.result():
+                tls_round3.append((link, flag, city, country_code, parsed))
+                tls3_ok += 1
+            else:
+                tls3_fail += 1
+            if tls3_processed % 10 == 0:
+                logging.info(f"TLS #3 прогресс: обработано {tls3_processed}, OK {tls3_ok}, FAIL {tls3_fail}")
+
+    logging.info(f"✅ TLS #3 завершена. OK {tls3_ok}, FAIL {tls3_fail}, всего {tls3_processed}")
+    if not tls_round3:
+        return []
+
+    # ---------- Этап 8: Реальная проверка раунд 1 ----------
+    logging.info(f"🧪 Этап 8: Реальная проверка #1 ({len(tls_round3)} ссылок, быстрые URL + Google, Facebook, Telegram)...")
+    real_round1 = []  # (link, flag, city, country_code)
+    stage_total = len(tls_round3)
     stage_current = 0
     real_ok = 0
     real_fail = 0
 
-    links_to_check = [link for link, _, _, _, _ in tls_second]
+    links_to_check = [link for link, _, _, _, _ in tls_round3]
 
     with ThreadPoolExecutor(max_workers=REAL_CHECK_CONCURRENCY) as executor:
         future_to_link = {executor.submit(lambda l: (l, check_with_singbox(l, FAST_TEST_URLS, REAL_SITES)), link): link for link in links_to_check}
@@ -857,23 +916,104 @@ def filter_working_links(links):
 
             # Находим соответствующие флаг, город, код страны
             flag = city = country_code = None
-            for l, f, c, cc, _ in tls_second:
+            for l, f, c, cc, _ in tls_round3:
                 if l == link:
                     flag, city, country_code = f, c, cc
                     break
 
             if is_working:
-                working_links_with_geo.append((link, flag, city, country_code))
+                real_round1.append((link, flag, city, country_code))
                 real_ok += 1
             else:
                 real_fail += 1
 
             if stage_current % 10 == 0:
-                log_msg = f"Реальная проверка прогресс: {stage_current}/{stage_total}, OK {real_ok}, FAIL {real_fail}"
+                log_msg = f"Реальная #1 прогресс: {stage_current}/{stage_total}, OK {real_ok}, FAIL {real_fail}"
                 logging.info(log_msg)
 
-    logging.info(f"📊 Реальная проверка завершена. Рабочих: {len(working_links_with_geo)}/{stage_total}, OK {real_ok}, FAIL {real_fail}")
-    return working_links_with_geo
+    logging.info(f"📊 Реальная #1 завершена. Прошли: {len(real_round1)}/{stage_total}, OK {real_ok}, FAIL {real_fail}")
+    if not real_round1:
+        return []
+
+    # ---------- Этап 9: Реальная проверка раунд 2 ----------
+    logging.info(f"🧪 Этап 9: Реальная проверка #2 ({len(real_round1)} ссылок)...")
+    real_round2 = []
+    stage_total = len(real_round1)
+    stage_current = 0
+    real_ok = 0
+    real_fail = 0
+
+    links_to_check = [link for link, _, _, _ in real_round1]
+
+    with ThreadPoolExecutor(max_workers=REAL_CHECK_CONCURRENCY) as executor:
+        future_to_link = {executor.submit(lambda l: (l, check_with_singbox(l, FAST_TEST_URLS, REAL_SITES)), link): link for link in links_to_check}
+        for future in as_completed(future_to_link):
+            stage_current += 1
+            current_check += 1
+            record_counter += 1
+            link, is_working = future.result()
+            short = shorten_link(link)
+
+            # Находим соответствующие флаг, город, код страны
+            flag = city = country_code = None
+            for l, f, c, cc in real_round1:
+                if l == link:
+                    flag, city, country_code = f, c, cc
+                    break
+
+            if is_working:
+                real_round2.append((link, flag, city, country_code))
+                real_ok += 1
+            else:
+                real_fail += 1
+
+            if stage_current % 10 == 0:
+                log_msg = f"Реальная #2 прогресс: {stage_current}/{stage_total}, OK {real_ok}, FAIL {real_fail}"
+                logging.info(log_msg)
+
+    logging.info(f"📊 Реальная #2 завершена. Прошли: {len(real_round2)}/{stage_total}, OK {real_ok}, FAIL {real_fail}")
+    if not real_round2:
+        return []
+
+    # ---------- Этап 10: Реальная проверка раунд 3 ----------
+    logging.info(f"🧪 Этап 10: Реальная проверка #3 ({len(real_round2)} ссылок)...")
+    real_round3 = []
+    stage_total = len(real_round2)
+    stage_current = 0
+    real_ok = 0
+    real_fail = 0
+
+    links_to_check = [link for link, _, _, _ in real_round2]
+
+    with ThreadPoolExecutor(max_workers=REAL_CHECK_CONCURRENCY) as executor:
+        future_to_link = {executor.submit(lambda l: (l, check_with_singbox(l, FAST_TEST_URLS, REAL_SITES)), link): link for link in links_to_check}
+        for future in as_completed(future_to_link):
+            stage_current += 1
+            current_check += 1
+            record_counter += 1
+            link, is_working = future.result()
+            short = shorten_link(link)
+
+            # Находим соответствующие флаг, город, код страны
+            flag = city = country_code = None
+            for l, f, c, cc in real_round2:
+                if l == link:
+                    flag, city, country_code = f, c, cc
+                    break
+
+            if is_working:
+                real_round3.append((link, flag, city, country_code))
+                real_ok += 1
+            else:
+                real_fail += 1
+
+            if stage_current % 10 == 0:
+                log_msg = f"Реальная #3 прогресс: {stage_current}/{stage_total}, OK {real_ok}, FAIL {real_fail}"
+                logging.info(log_msg)
+
+    logging.info(f"📊 Реальная #3 завершена. Прошли: {len(real_round3)}/{stage_total}, OK {real_ok}, FAIL {real_fail}")
+
+    return real_round3
 
 # ---------- СОХРАНЕНИЕ ----------
 def save_working_links(links_with_geo):
@@ -882,7 +1022,6 @@ def save_working_links(links_with_geo):
         logging.warning("Нет серверов для сохранения.")
         return 0
 
-    # Все ссылки уже российские, сортировка не требуется
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         f.write(f"#profile-title:{PROFILE_TITLE}\n")
         f.write(f"#subscription-userinfo:{SUBSCRIPTION_USERINFO}\n")
@@ -890,10 +1029,11 @@ def save_working_links(links_with_geo):
         f.write(f"#support-url:{SUPPORT_URL}\n")
         f.write(f"#profile-web-page-url:{PROFILE_WEB_PAGE_URL}\n")
         f.write(f"#announce: АКТИВНЫХ ТОННЕЛЕЙ 🚀 {len(links_with_geo)} | ОБНОВЛЕНО 📅 {TODAY_STR}\n")
-        for idx, (link, flag, city, _) in enumerate(links_with_geo, 1):
+        for idx, (link, flag, city, country_code) in enumerate(links_with_geo, 1):
             link_clean = re.sub(r'#.*$', '', link)
             city_part = f" {city}" if city else ""
-            tag = f"#🔑📱ТОННЕЛЬ {idx:04d} | {flag}{city_part} |"
+            country_flag = flag if flag else country_code
+            tag = f"#🔑📱ТОННЕЛЬ {idx:04d} | {country_flag}{city_part} |"
             f.write(link_clean + tag + '\n')
 
     logging.info(f"✅ Сохранено {len(links_with_geo)} серверов в {OUTPUT_FILE}")
@@ -929,7 +1069,7 @@ def check_singbox_available():
 # ---------- ГЛАВНАЯ ----------
 def main():
     global record_counter, current_check, total_checks
-    logging.info("🟢 Запуск УСИЛЕННОГО генератора подписок (TCP x2, TLS x2, проверка на Google, Facebook, Telegram; фильтрация: только Россия)")
+    logging.info("🟢 Запуск УЛЬТРА-УСИЛЕННОГО генератора подписок (TCP x3, TLS x3, реальная x3, проверка на Google, Facebook, Telegram; фильтрация: Россия + Европа)")
     if not check_singbox_available():
         logging.error("sing-box обязателен. Завершение.")
         return
