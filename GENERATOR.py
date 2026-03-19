@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-# GENERATOR.py – Ультра-усиленная версия с 5-кратными TCP/TLS проверками и одной реальной проверкой на 5 сайтов
+# GENERATOR.py – Ультра-усиленная версия с 5-кратными TCP/TLS проверками и одной реальной проверкой на 3 сайта (Google, Telegram, YouTube)
 # Поддерживает только Россию (RU).
-# Проверка реальных сайтов: Google, Facebook, Telegram, YouTube, WhatsApp (один раунд).
 
 import os
 import re
@@ -64,13 +63,11 @@ FAST_TEST_URLS = [
     "http://connectivitycheck.gstatic.com/generate_204",
     "http://www.gstatic.com/generate_204"
 ]
-# Пять реальных сайтов для проверки
+# Три реальных сайта для проверки (Google, Telegram, YouTube)
 REAL_SITES = [
     "https://www.google.com/generate_204",
-    "https://www.facebook.com/",
     "https://telegram.org/",
-    "https://www.youtube.com/",
-    "https://www.whatsapp.com/"
+    "https://www.youtube.com/"
 ]
 
 # =============================================================================
@@ -712,11 +709,11 @@ def check_with_singbox(link, fast_urls, real_urls, fast_timeout=REAL_CHECK_TIMEO
         if os.path.exists(config_path):
             os.unlink(config_path)
 
-# ---------- ФИЛЬТРАЦИЯ (УЛЬТРА-УСИЛЕННАЯ, 5xTCP, 5xTLS, 1xРеальная на 5 сайтов) ----------
+# ---------- ФИЛЬТРАЦИЯ (УЛЬТРА-УСИЛЕННАЯ, 5xTCP, 5xTLS, 1xРеальная на 3 сайта) ----------
 def filter_working_links(links):
     global record_counter, current_check, total_checks
     total_checks = len(links)
-    logging.info(f"🚀 Начинаю УЛЬТРА-УСИЛЕННУЮ проверку {total_checks} ссылок (TCP x5, TLS x5, реальная x1 на 5 сайтов)")
+    logging.info(f"🚀 Начинаю УЛЬТРА-УСИЛЕННУЮ проверку {total_checks} ссылок (TCP x5, TLS x5, реальная x1 на Google, Telegram, YouTube)")
     logging.info(f"🌍 Фильтр по гео: только Россия")
 
     # ---------- TCP раунды 1-5 ----------
@@ -805,8 +802,8 @@ def filter_working_links(links):
     if not tls_current:
         return []
 
-    # ---------- Реальная проверка (один раунд, 5 сайтов) ----------
-    logging.info(f"🧪 Этап реальной проверки: {len(tls_current)} ссылок, быстрые URL + Google, Facebook, Telegram, YouTube, WhatsApp...")
+    # ---------- Реальная проверка (один раунд, 3 сайта) ----------
+    logging.info(f"🧪 Этап реальной проверки: {len(tls_current)} ссылок, быстрые URL + Google, Telegram, YouTube...")
     real_working = []  # (link, flag, city, country_code)
     stage_total = len(tls_current)
     stage_current = 0
@@ -899,7 +896,7 @@ def check_singbox_available():
 # ---------- ГЛАВНАЯ ----------
 def main():
     global record_counter, current_check, total_checks
-    logging.info("🟢 Запуск УЛЬТРА-УСИЛЕННОГО генератора подписок (TCP x5, TLS x5, реальная x1 на Google, Facebook, Telegram, YouTube, WhatsApp; фильтрация: только Россия)")
+    logging.info("🟢 Запуск УЛЬТРА-УСИЛЕННОГО генератора подписок (TCP x5, TLS x5, реальная x1 на Google, Telegram, YouTube; фильтрация: только Россия)")
     if not check_singbox_available():
         logging.error("sing-box обязателен. Завершение.")
         return
