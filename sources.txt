@@ -19,7 +19,10 @@ https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main
 # kizyk
 https://raw.githubusercontent.com/Maskkost93/kizyak-vpn-4.0/refs/heads/main/kizyaktestru.txt
 
-
+# 🦀 VPN Checker — Rust Edition 🦀
+https://raw.githubusercontent.com/seknei3/psychic-fiestas/refs/heads/main/bobi_vpn.txt
+https://raw.githubusercontent.com/seknei3/psychic-fiestas/refs/heads/main/vpn.txt
+https://raw.githubusercontent.com/seknei3/psychic-fiestas/refs/heads/main/countries/russia.txt
 
 # fsstcon
 https://sub.harknmav.fun/mendc2yGo4ELy19a
