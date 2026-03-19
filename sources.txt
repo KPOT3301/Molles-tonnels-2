@@ -6,7 +6,7 @@ https://raw.githubusercontent.com/kort0881/vpn-checker-backend/main/checked/RU_B
 https://raw.githubusercontent.com/kort0881/vpn-checker-backend/main/checked/RU_Best/ru_white_part4.txt
 https://raw.githubusercontent.com/kort0881/vpn-checker-backend/main/checked/RU_Best/ru_white_all_part1.txt
 https://raw.githubusercontent.com/kort0881/vpn-checker-backend/main/checked/RU_Best/ru_white_all_part2.txt
-https://raw.githubusercontent.com/kort0881/vpn-checker-backend/refs/heads/main/checked/RU_Best/ru_white_all_BLACK.txt
+
 
 # ShatakVPN
 https://raw.githubusercontent.com/ShatakVPN/ConfigForge-V2Ray/main/configs/ru/all.txt
