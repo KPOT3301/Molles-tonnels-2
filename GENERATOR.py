@@ -718,7 +718,7 @@ def filter_working_links(links):
 
     # ---------- TCP раунды 1-5 ----------
     tcp_current = [(link, None, None) for link in links]  # (link, ip, latency) - пока без ip и latency
-    for round_num in range(1, 6):
+    for round_num in range(1, 11):
         if not tcp_current:
             logging.info(f"📊 TCP #{round_num}: нет ссылок для проверки, завершаем.")
             return []
@@ -761,7 +761,7 @@ def filter_working_links(links):
     for link, (flag, city, country_code, parsed, latency) in allowed_geo.items():
         tls_current.append((link, flag, city, country_code, parsed))
 
-    for round_num in range(1, 6):
+    for round_num in range(1, 11):
         if not tls_current:
             logging.info(f"📊 TLS #{round_num}: нет ссылок для проверки, завершаем.")
             return []
