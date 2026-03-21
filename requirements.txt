@@ -1,5 +1,5 @@
 # requirements.txt
 requests
 pysocks
-geoip2
+geoip2fast
 tzdata
