@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GENERATOR.py – Ультра-усиленная версия с 5-кратными TCP/TLS проверками и одной реальной проверкой на 3 сайта (Google, Telegram, YouTube)
-# Геолокация через MaxMind GeoLite2 City (обновление раз в неделю)
+# Геолокация через geoip2fast (автоматическая загрузка базы)
 # Фильтр: только Россия и Европа (исключаем без флага, США, Азию, Южную Америку)
 
 import os
@@ -16,12 +16,10 @@ import tempfile
 import sys
 import random
 import threading
-import gzip
-import shutil
 from urllib.parse import urlparse, parse_qs
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # =============================================================================
 # НАСТРОЙКИ (можно изменять)
@@ -61,12 +59,6 @@ REAL_SITES = [
     "https://telegram.org/",
     "https://www.youtube.com/"
 ]
-
-GEOIP_DB_DIR = "GeoIP"
-GEOIP_DB_FILENAME = "GeoLite2-City.mmdb"
-GEOIP_DB_PATH = os.path.join(GEOIP_DB_DIR, GEOIP_DB_FILENAME)
-GEOIP_DB_URL = "https://cdn.jsdelivr.net/npm/geolite2-city/GeoLite2-City.mmdb.gz"
-GEOIP_MAX_AGE_DAYS = 7
 
 # Страны, которые НЕ пропускаем
 EXCLUDED_COUNTRIES = {
@@ -141,57 +133,31 @@ def get_next_port():
         _port_counter += 1
         return port
 
-def ensure_geoip_db():
-    os.makedirs(GEOIP_DB_DIR, exist_ok=True)
-    if os.path.exists(GEOIP_DB_PATH):
-        mtime = datetime.fromtimestamp(os.path.getmtime(GEOIP_DB_PATH))
-        if datetime.now() - mtime < timedelta(days=GEOIP_MAX_AGE_DAYS):
-            logging.info(f"🌍 База GeoIP найдена (возраст < {GEOIP_MAX_AGE_DAYS} дней)")
-            return True
-        else:
-            logging.info("🌍 База GeoIP устарела, скачиваю новую...")
-    else:
-        logging.info("🌍 База GeoIP не найдена, скачиваю...")
-    try:
-        headers = {'User-Agent': get_random_ua()}
-        resp = requests.get(GEOIP_DB_URL, timeout=30, headers=headers)
-        resp.raise_for_status()
-        gz_path = GEOIP_DB_PATH + ".gz"
-        with open(gz_path, 'wb') as f:
-            f.write(resp.content)
-        with gzip.open(gz_path, 'rb') as f_in:
-            with open(GEOIP_DB_PATH, 'wb') as f_out:
-                shutil.copyfileobj(f_in, f_out)
-        os.remove(gz_path)
-        logging.info(f"✅ База GeoIP успешно загружена и распакована в {GEOIP_DB_PATH}")
-        return True
-    except Exception as e:
-        logging.error(f"❌ Ошибка загрузки GeoIP: {e}")
-        return False
+# ---------- GEOIP (geoip2fast) ----------
+try:
+    from geoip2fast import GeoIP2Fast
+    GEOIP_AVAILABLE = True
+except ImportError:
+    GEOIP_AVAILABLE = False
+    logging.warning("⚠️ geoip2fast не установлена. Флаги стран не будут добавлены. Установите: pip install geoip2fast")
 
-reader = None
-def init_geoip():
-    global reader
-    if ensure_geoip_db():
-        try:
-            import geoip2.database
-            reader = geoip2.database.Reader(GEOIP_DB_PATH)
-            logging.info("✅ GeoIP reader инициализирован")
-            return True
-        except Exception as e:
-            logging.error(f"❌ Не удалось открыть базу GeoIP: {e}")
-            return False
-    else:
-        logging.warning("⚠️ GeoIP недоступен, флаги и города не будут добавлены")
-        return False
+geoip = None
+if GEOIP_AVAILABLE:
+    try:
+        geoip = GeoIP2Fast()
+        logging.info("✅ geoip2fast загружена (база данных загружается автоматически)")
+    except Exception as e:
+        GEOIP_AVAILABLE = False
+        logging.error(f"❌ Не удалось инициализировать geoip2fast: {e}")
 
 def get_geo_info(ip):
-    if reader is None:
+    """Возвращает (флаг, город, код страны) — город всегда пуст"""
+    if not GEOIP_AVAILABLE or geoip is None:
         return None, None, None
     try:
-        response = reader.city(ip)
-        country_code = response.country.iso_code
-        city = response.city.name if response.city.name else ""
+        result = geoip.lookup(ip)
+        country_code = result.country_code or ""
+        city = ""  # город не выводим
         if country_code:
             flag = ''.join(chr(127397 + ord(c)) for c in country_code.upper())
             return flag, city, country_code
@@ -200,6 +166,7 @@ def get_geo_info(ip):
     except Exception:
         return None, None, None
 
+# ---------- ВСПОМОГАТЕЛЬНЫЕ ----------
 @lru_cache(maxsize=256)
 def resolve_host(host):
     return socket.gethostbyname(host)
@@ -728,7 +695,6 @@ def filter_working_links(links):
 
     # ---------- Геолокация и фильтрация по странам (после TCP, до TLS) ----------
     logging.info(f"🌍 Получаем геоданные для {len(tcp_current)} серверов...")
-    init_geoip()
     filtered = []
     for link, ip, latency in tcp_current:
         flag, city, country_code = get_geo_info(ip) if ip else (None, None, None)
