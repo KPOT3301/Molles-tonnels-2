@@ -48,7 +48,7 @@ TCP_MAX_WORKERS = 400
 MAX_LATENCY_MS = 250
 
 # ---------- TLS-проверка ----------
-TLS_CHECK_TIMEOUT = 2
+TLS_CHECK_TIMEOUT = 0.5
 TLS_MAX_WORKERS = 100
 
 # ---------- Реальная проверка через sing-box ----------
