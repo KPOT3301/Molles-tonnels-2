@@ -796,10 +796,26 @@ def save_working_links(links_with_geo):
         f.write(f"#profile-web-page-url:{PROFILE_WEB_PAGE_URL}\n")
         f.write(f"#announce: АКТИВНЫХ ТОННЕЛЕЙ 🚀 {len(links_with_geo)} | ОБНОВЛЕНО 📅 {TODAY_STR}\n")
         for idx, (link, flag, city, country_code) in enumerate(links_with_geo, 1):
-            link_clean = re.sub(r'#.*$', '', link)
-            city_part = f" {city}" if city else ""
+            link_clean = re.sub(r'#.*$', '', link)   # удаляем старый тег
+            parsed = parse_link(link_clean)
+            sni = None
+            if parsed:
+                sni = parsed.get('explicit_sni') or parsed.get('sni')
+            # Формируем части тега: флаг, затем SNI если есть, затем город если есть
+            parts = []
+            # флаг
             country_flag = flag if flag else (country_code if country_code else "")
-            tag = f"#🔑📱ТОННЕЛЬ {idx:04d} | {country_flag}{city_part} |"
+            if country_flag:
+                parts.append(country_flag)
+            # SNI
+            if sni:
+                parts.append(sni)
+            # город
+            if city:
+                parts.append(city)
+            # Объединяем через " | "
+            tag_suffix = " | ".join(parts) if parts else ""
+            tag = f"#🔑📱ТОННЕЛЬ {idx:04d} | {tag_suffix} |" if tag_suffix else f"#🔑📱ТОННЕЛЬ {idx:04d} |"
             f.write(link_clean + tag + '\n')
     logging.info(f"✅ Сохранено {len(links_with_geo)} серверов в {OUTPUT_FILE}")
     return len(links_with_geo)
