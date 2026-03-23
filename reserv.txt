@@ -1,3 +1,6 @@
+# шкатулка запретов 
+https://raw.githubusercontent.com/Mihuil121/vpn-checker-backend-fox/main/checked/My_Euro/euro_universal.txt
+
 # kort0881 ДОСТУП К ИНТЕРНЕТУ
 https://raw.githubusercontent.com/kort0881/vpn-checker-backend/main/checked/RU_Best/ru_white_part1.txt
 https://raw.githubusercontent.com/kort0881/vpn-checker-backend/main/checked/RU_Best/ru_white_part2.txt
