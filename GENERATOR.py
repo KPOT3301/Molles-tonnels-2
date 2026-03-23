@@ -788,6 +788,10 @@ def save_working_links(links_with_geo):
     if not links_with_geo:
         logging.warning("Нет серверов для сохранения.")
         return 0
+
+    # Сортировка: сначала российские (country_code == 'RU'), затем остальные
+    links_with_geo.sort(key=lambda x: (0 if x[3] == 'RU' else 1))
+
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         f.write(f"#profile-title:{PROFILE_TITLE}\n")
         f.write(f"#subscription-userinfo:{SUBSCRIPTION_USERINFO}\n")
