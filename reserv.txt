@@ -1,3 +1,6 @@
+# белые списки для wifi
+https://white-lists.vercel.app/api/filter?code=ALL&type=black&min=false
+
 # шкатулка запретов 
 https://raw.githubusercontent.com/Mihuil121/vpn-checker-backend-fox/main/checked/My_Euro/euro_universal.txt
 
