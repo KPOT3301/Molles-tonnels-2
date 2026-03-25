@@ -1,6 +1,10 @@
 # ркп
 https://raw.githubusercontent.com/RKPchannel/RKP_bypass_configs/refs/heads/main/configs/url_work.txt
 
+# igarek
+https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt
+
+
 # белые списки для wifi
 https://white-lists.vercel.app/api/filter?code=ALL&type=black&min=false
 
