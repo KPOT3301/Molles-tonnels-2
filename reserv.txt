@@ -1,3 +1,6 @@
+# ркп
+https://raw.githubusercontent.com/RKPchannel/RKP_bypass_configs/refs/heads/main/configs/url_work.txt
+
 # белые списки для wifi
 https://white-lists.vercel.app/api/filter?code=ALL&type=black&min=false
 
