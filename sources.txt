@@ -7,5 +7,3 @@ https://raw.githubusercontent.com/VPN-cat/VPN/refs/heads/main/configs/VPN-cat
 # igarek
 https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt
 
-# ShatakVPN
-https://raw.githubusercontent.com/ShatakVPN/ConfigForge-V2Ray/main/configs/ru/all.txt
