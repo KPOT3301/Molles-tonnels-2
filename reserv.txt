@@ -49,6 +49,9 @@ https://raw.githubusercontent.com/kort0881/vpn-checker-backend/main/checked/My_E
 https://raw.githubusercontent.com/kort0881/vpn-checker-backend/main/checked/My_Euro/my_euro_all_part1.txt
 https://raw.githubusercontent.com/kort0881/vpn-checker-backend/main/checked/My_Euro/my_euro_all_part2.txt
 
+# ShatakVPN
+https://raw.githubusercontent.com/ShatakVPN/ConfigForge-V2Ray/main/configs/ru/all.txt
+
 
  # hard vpn
 https://raw.githubusercontent.com/ksenkovsolo/HardVPN-bypass-WhiteLists-/refs/heads/main/vpn-lte/best_good_renamed.txt
