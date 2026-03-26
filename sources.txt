@@ -1,6 +1,3 @@
-# шкатулка запретов 
-https://raw.githubusercontent.com/Mihuil121/vpn-checker-backend-fox/main/checked/My_Euro/euro_universal.txt
 
-# cat 😺 vpn
-https://raw.githubusercontent.com/VPN-cat/VPN/refs/heads/main/configs/VPN-cat
-
+# ркп
+https://raw.githubusercontent.com/RKPchannel/RKP_bypass_configs/refs/heads/main/configs/url_work.txt
