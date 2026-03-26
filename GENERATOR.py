@@ -792,13 +792,21 @@ def save_working_links(links_with_geo):
     # Сортировка: сначала российские (country_code == 'RU'), затем остальные
     links_with_geo.sort(key=lambda x: (0 if x[3] == 'RU' else 1))
 
+    # Получаем текущее время с учётом часового пояса
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo(TIMEZONE))
+    except ImportError:
+        now = datetime.now()
+    time_str = now.strftime("%H:%M:%S")
+
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         f.write(f"#profile-title:{PROFILE_TITLE}\n")
         f.write(f"#subscription-userinfo:{SUBSCRIPTION_USERINFO}\n")
         f.write(f"#profile-update-interval:{PROFILE_UPDATE_INTERVAL}\n")
         f.write(f"#support-url:{SUPPORT_URL}\n")
         f.write(f"#profile-web-page-url:{PROFILE_WEB_PAGE_URL}\n")
-        f.write(f"#announce: АКТИВНЫХ ТОННЕЛЕЙ 🚀 {len(links_with_geo)} | ОБНОВЛЕНО 📅 {TODAY_STR}\n")
+        f.write(f"#announce: АКТИВНЫХ ТОННЕЛЕЙ 🚀 {len(links_with_geo)} | ОБНОВЛЕНО 📅 {TODAY_STR} ⏰ {time_str}\n")
         for idx, (link, flag, city, country_code) in enumerate(links_with_geo, 1):
             link_clean = re.sub(r'#.*$', '', link)   # удаляем старый тег
             parsed = parse_link(link_clean)
