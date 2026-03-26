@@ -1,9 +1,11 @@
-# run.yml
 name: Check Vless Servers
 
 on:
   schedule:
-    - cron: '0 22 * * *'   # 22:00 UTC = 03:00 ЕКБ (UTC+5)
+    # 4:00 ЕКБ = 23:00 UTC предыдущего дня
+    # 11:00 ЕКБ = 6:00 UTC
+    # 18:00 ЕКБ = 13:00 UTC
+    - cron: '0 23,6,13 * * *'
   workflow_dispatch:
 
 jobs:
