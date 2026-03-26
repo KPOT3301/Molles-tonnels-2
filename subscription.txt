@@ -1,4 +1,5 @@
 #profile-title:🇷🇺КРОТовые ТОННЕЛИ🇷🇺
+#subscription-userinfo:upload=0; download=0; total=0; expire=0
 #profile-update-interval:1
 #support-url:🇷🇺КРОТовые ТОННЕЛИ🇷🇺
 #profile-web-page-url:🇷🇺КРОТовые ТОННЕЛИ🇷🇺
