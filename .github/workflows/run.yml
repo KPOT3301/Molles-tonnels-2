@@ -2,10 +2,10 @@ name: Check Vless Servers
 
 on:
   schedule:
-    # 4:00 ЕКБ = 23:00 UTC предыдущего дня
+    # 5:00 ЕКБ = 0:00 UTC
     # 11:00 ЕКБ = 6:00 UTC
     # 17:00 ЕКБ = 12:00 UTC
-    - cron: '0 23,6,12 * * *'
+    - cron: '0 0,6,12 * * *'
   workflow_dispatch:
 
 jobs:
